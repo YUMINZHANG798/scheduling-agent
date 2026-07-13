@@ -1,0 +1,4 @@
+id,date,area_code,promotion_type,boost_factor,description
+promo_001,2026-07-17,produce,high,1.3,周五果蔬会员日
+promo_002,2026-07-18,meat,low,1.2,周末肉类特惠
+promo_003,2026-07-19,aquatic,low,1.25,周日水产促销

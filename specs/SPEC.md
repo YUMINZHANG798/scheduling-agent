@@ -16,6 +16,8 @@
 | 版本 | 日期 | 修订内容 | 修订人 |
 | --- | --- | --- | --- |
 | v1.0 | 2026-07-12 | 初始版本 | — |
+| v1.1 | 2026-07-13 | 引入正式工/临时工分类：正式工两班(8:00-16:00/14:00-22:00)固定在部门排班，临时工混排3-6小时每部门每日最多1班 | — |
+| v1.2 | 2026-07-13 | 正式工新增两头班(8:00-12:00,17:00-21:00)、新增员工周意愿表(employee_weekly_preferences)，临时工工作日固定18:00-21:00、周末灵活 | — |
 
 ---
 
@@ -269,7 +271,7 @@ SemiMixedSchedulingWorkbench (页面根组件)
 interface DemandSlot {
   date: string;                    // 2026-07-13
   weekday: string;                 // Monday
-  slot: string;                    // 17:00-19:00
+  slot: string;                    // 16:00-18:00
   areaCode: string;                // produce
   taskCode: string;                // restock
   requiredCount: number;           // 3
@@ -281,7 +283,8 @@ interface DemandSlot {
 }
 
 // === 员工相关 ===
-type EmployeeType = 'professional' | 'regional' | 'mixed' | 'floating';
+type EmployeeType = 'regular' | 'temporary';
+type RegularShiftType = 'morning' | 'evening' | 'split' | 'rotating';
 type SkillLevel = 'S' | 'A' | 'B' | 'C';
 
 interface EmployeeSkill {
@@ -293,28 +296,29 @@ interface EmployeeSkill {
 interface Employee {
   id: string;                      // emp_001
   name: string;                    // 老王
-  mainArea: string;                // aquatic
+  mainArea: string | null;         // 正式工有固定区域，临时工为 null
   employeeType: EmployeeType;
+  regularShiftType?: RegularShiftType;  // 正式工班次偏好，临时工无此字段
   skills: EmployeeSkill[];
   weeklyHoursLimit: number;        // 40
-  canMixed: boolean;
   currentWeeklyHours?: number;     // 动态计算
 }
 
 // === 排班相关 ===
-type AssignmentType = 'fixed' | 'regional' | 'mixed';
+type AssignmentType = 'regular' | 'temporary';
 type RiskLevel = 'none' | 'info' | 'warning' | 'critical';
 type ScheduleSource = 'system' | 'manual';
 
 interface ScheduleItem {
   id: string;                      // si_001
   date: string;
-  slot: string;
+  slot: string;                    // 正式工: "08:00-16:00"或"14:00-22:00"; 临时工: 实际时段"09:00-14:00"
   areaCode: string;
   taskCode: string;
   employeeId: string;
   employeeName: string;
-  assignmentType: AssignmentType;
+  assignmentType: AssignmentType;  // regular=正式工排班, temporary=临时工排班
+  employeeType: EmployeeType;      // 冗余字段，方便前端展示
   isProtected: boolean;
   riskLevel: RiskLevel;
   explanation?: string;
@@ -355,7 +359,7 @@ interface AgentResponse {
 }
 
 // === 风险相关 ===
-type RiskType = 'professional_gap' | 'baseline_shortage' | 'skill_mismatch' | 'overtime' | 'mixed_overuse';
+type RiskType = 'professional_gap' | 'baseline_shortage' | 'skill_mismatch' | 'overtime' | 'temp_overuse' | 'peak_gap';
 
 interface RiskItem {
   id: string;
@@ -391,8 +395,8 @@ interface AreaConfig {
   code: string;
   name: string;
   allowMixed: boolean;
-  baselineMin: number;
-  baselineMax: number;
+  baselineMin: number;          // 正式工保底最少人数
+  baselineMax: number;          // 正式工保底最多人数
 }
 
 interface AreaTask {
@@ -475,7 +479,7 @@ backend/
 │   ├── scheduling/                      # 排班引擎层
 │   │   ├── __init__.py
 │   │   ├── generator.py                 # 排班主流程调度器
-│   │   ├── rules.py                     # 规则引擎：专业岗/保护时段/保底/工时校验
+│   │   ├── rules.py                     # 规则引擎：专业岗/保底/工时校验
 │   │   ├── scorer.py                    # 候选人评分：加权评分 + 归一化
 │   │   ├── risks.py                     # 风险检测：缺口/超工时/技能不匹配
 │   │   └── constants.py                 # 排班常量：权重配置、默认值
@@ -528,7 +532,7 @@ backend/
 | --- | --- | --- |
 | 需求计算 | DemandService | 读取历史销售/客流/订单数据，叠加节假日、天气、促销因子，输出分区域分时段需求 |
 | 排班生成 | SchedulingGenerator | 执行半混班全流程：锁定专业岗 → 校验保底 → 构建混排池 → 评分分配 |
-| 规则引擎 | RulesEngine | 校验专业资质、保护时段、区域保底、工时上限、技能匹配等约束 |
+| 规则引擎 | RulesEngine | 校验专业资质、区域保底、工时上限、技能匹配等约束 |
 | 候选人评分 | CandidateScorer | 按技能(35%)、熟悉度(20%)、剩余工时(15%)、高峰适配(10%)、区域影响(15%)、偏好(5%)加权评分 |
 | KPI 计算 | KpiService | 计算专业岗覆盖率、区域保底达成率、混排利用率、人工干预率 |
 | 风险检测 | RiskDetector | 检测缺口、超工时、技能不匹配、混排过度使用等风险 |
@@ -542,8 +546,8 @@ backend/
 ```text
 用户输入 "生成下周半混班班表"
   → AgentService.handle_message()
-    → 1. 意图识别 (intent_classification)
-      → INTENT_GENERATE
+      → 1. 意图识别 (intent_classification)
+        → generate_schedule
     → 2. 工具调用序列
       → 2.1 get_historical_summary(store_id, week)
         → 读取历史数据摘要
@@ -595,10 +599,14 @@ backend/
 4. 对不可调整的排班给出充分的拒绝理由和替代方案。
 
 半混班核心原则：
-- 专业固定岗（杀鱼、切肉等）必须由 S/A 级专业人员覆盖。
-- 保护时段内专业人士不得跨区抽调。
-- 核心区域关键时段必须满足保底人数。
-- 高峰期缺口优先从混排池补位。
+- 正式工固定在所属部门排班，三班制（早班 8:00-16:00、晚班 14:00-22:00、两头班 8:00-12:00+17:00-21:00），不跨区。
+- 员工每周可申请变动班次意愿，调度时优先采用周意愿，无意愿则用默认班次。
+- 正式工每周可申请休假 1 天，系统自动校验每日最低在岗人数；同日申请超限时驳回部分申请。
+- 专业固定岗（杀鱼、切肉等）必须由 S/A 级正式工专业人员覆盖。
+- 核心部门各班次必须满足正式工保底人数。
+- 临时工跨部门混排补位，工作日固定 18:00-21:00（3小时），周末根据忙碌程度决定时长。
+- 临时工不干专业工作，只分配非专业任务（补货、称重、打包、收银支援等）。
+- 高峰期缺口优先从临时工池补位。
 
 你的回答必须包含三部分：
 1. 结论：做了什么/能不能做/推荐谁。
@@ -616,14 +624,11 @@ backend/
 ```text
 根据用户输入判断意图，从以下列表中选择最匹配的一项：
 
-INTENT_GENERATE: 用户要求生成排班（关键词：生成、排班、班表、下周）
-INTENT_EXPLAIN_DEMAND: 用户询问需求原因（关键词：为什么需要、为什么缺、需求依据）
-INTENT_EXPLAIN_FIXED: 用户询问固定岗原因（关键词：为什么一直在、为什么固定在）
-INTENT_RECOMMEND_SUPPORT: 用户询问支援人选（关键词：谁能支援、缺人、推荐）
-INTENT_EXPLAIN_BLOCKED: 用户询问为什么不能调动（关键词：能不能调、为什么不）
-INTENT_LIST_RISKS: 用户询问风险（关键词：风险、问题、需要注意）
-INTENT_REDUCE_INTERVENTION: 用户询问如何减少干预（关键词：减少修改、优化规则）
-UNKNOWN: 无法识别
+generate_schedule: 用户要求生成排班（关键词：生成、排班、班表、下周）
+explain_demand: 用户询问需求原因（关键词：为什么需要、为什么缺、需求依据）
+recommend_support: 用户询问支援人选（关键词：谁能支援、缺人、推荐）
+resolve_leave: 用户询问或处理休假相关（关键词：休假、请假、调休）
+unknown: 无法识别
 
 用户输入：{user_message}
 意图：
@@ -636,35 +641,30 @@ class AgentResponse(BaseModel):
     """Agent 响应结构化输出"""
 
     intent: str = Field(description="识别到的意图编码")
-    summary: str = Field(description="Agent 操作总结，一句话说明做了什么")
-    demand_reasoning: List[str] = Field(
+    conclusion: str = Field(description="结论，一句话说明做了什么/能不能做/推荐谁")
+    reasons: List[str] = Field(
         default=[],
-        description="需求推理过程，每条一句话"
-    )
-    schedule_highlights: List[str] = Field(
-        default=[],
-        description="排班亮点，每条一句话"
+        description="原因，基于数据、规则和评分的具体解释"
     )
     candidates: Optional[List[CandidateInfo]] = Field(
         default=None,
         description="推荐的候选人列表"
     )
-    risks: List[RiskInfo] = Field(
-        default=[],
-        description="风险列表"
-    )
     next_actions: List[str] = Field(
         default=[],
         description="建议用户的后续操作"
+    )
+    is_fallback: bool = Field(
+        default=False,
+        description="是否由规则兜底生成（LLM 不可用时为 True）"
     )
 
     @field_validator('intent')
     @classmethod
     def validate_intent(cls, v):
         allowed = [
-            'generate_schedule', 'explain_demand', 'explain_fixed',
-            'recommend_support', 'explain_blocked', 'list_risks',
-            'reduce_intervention', 'unknown'
+            'generate_schedule', 'explain_demand', 'recommend_support',
+            'resolve_leave', 'unknown'
         ]
         if v not in allowed:
             raise ValueError(f'intent 必须是 {allowed} 之一，收到: {v}')
@@ -674,9 +674,10 @@ class AgentResponse(BaseModel):
 class CandidateInfo(BaseModel):
     """候选人信息"""
     employee_name: str
+    employee_type: str
+    main_area: Optional[str]
     skills: List[str]
     score: int = Field(ge=0, le=100)
-    recommended: bool
     reason: str
     risks: List[str] = []
 
@@ -695,7 +696,7 @@ class RiskInfo(BaseModel):
 | LLM 调用超时 | Provider 超时异常 (30s) | 返回程序计算的需求和排班结果，备注"解释服务暂不可用" |
 | LLM 返回格式非法 | Pydantic 校验失败 | 重试 1 次，仍失败则使用规则兜底结果 |
 | LLM 返回空内容 | 空字符串检测 | 使用模板填充默认解释 |
-| 意图识别置信度低 | 得分阈值 < 0.6 | 默认走 INTENT_GENERATE 或返回 UNKNOWN 引导用户 |
+| 意图识别置信度低 | 得分阈值 < 0.6 | 默认走 generate_schedule 或返回 unknown 引导用户 |
 | 工具调用失败 | 工具函数异常 | 记录错误日志，跳过该工具，继续执行剩余流程 |
 
 ---
@@ -717,14 +718,28 @@ class RiskInfo(BaseModel):
 ### 7.2 需求计算公式
 
 ```
-demand_count = baseline_count × holiday_factor × weather_factor × promotion_factor
+demand_count = baseline_count × holiday_factor × weekend_factor × peak_factor × weather_factor(task_type) × promotion_factor
 
-demand_score = min(100, baseline_score × 100 × factor_product)
+其中：
+  - holiday_factor: 节假日系数（见 §7.1，节假日上浮）
+  - weekend_factor: 周末 = 1.1，平日 = 1.0
+  - peak_factor: 高峰时段 = 1.3~1.5（按 §7.3 识别），低峰 = 0.7~0.8，正常 = 1.0
+  - weather_factor(task_type): 按任务类型取不同口径——到店类任务(store 口径：降雨 -10%~20%/高温 -5%~15%)、线上类任务(online 口径：降雨 +15%~25%/高温 +10%~20%)（方向见 §7.1）
+  - promotion_factor: 促销系数（见 §7.1 / §12.2）。数据来源为 promotions 表：按 (date, area_code) 匹配促销记录取其 boost_factor；无匹配促销时为 1.0（对应 §7.1 促销 +20%~+40%）
+
+demand_score:
+  - baseline_score = baseline_count / area_task_max_capacity   # 基准占用率（area_task_max_capacity 为该区域该任务单 slot 最大承载人数）
+  - factor_product = holiday_factor × weekend_factor × peak_factor × weather_factor(task_type) × promotion_factor
+  - demand_score = min(100, baseline_score × 100 × factor_product)
 
 confidence:
   - high: 数据充足(>4周同星期数据) 且 因子均为已知
   - medium: 数据一般(2-4周) 或 含天气预报等不确定性因子
   - low: 数据不足(<2周) 或 含多个不确定性因子
+
+is_protected（保护时段标记）:
+  - 当需求项对应专业岗任务（area_tasks.is_professional = 1）且处于高峰/晚高峰时段（priority = high）时，is_protected = 1
+  - 语义：该需求必须由本区具备 min_skill_level 的正式工（S/A 级）覆盖，排班引擎须优先保障（见 §8 约束）
 ```
 
 ### 7.3 高峰/低峰识别算法
@@ -738,9 +753,9 @@ def identify_peak_slots(traffic_df: pd.DataFrame, sales_df: pd.DataFrame) -> Lis
     1. 按 slot 聚合客流和交易数的均值
     2. 计算每个 slot 的百分位排名
     3. top 25% → high, 25%-75% → normal, bottom 25% → low
-    4. 叠加区域特定高峰（如水产早市 08:00-11:00）
+    4. 叠加区域特定高峰（如水产早市 08:00-10:00）
     """
-    # slot 粒度建议：早 08-11, 中 11-14, 午 14-17, 晚 17-20
+    # slot 粒度：08:00-09:00, 09:00-10:00, 10:00-11:00, ... 20:00-21:00（1小时一段，与数据库表/CSV 一致）
     ...
 ```
 
@@ -759,24 +774,46 @@ def generate_schedule(
     version_id: str
 ) -> ScheduleResult:
     """
-    半混班排班主流程
+    半混班排班主流程 (正式工+临时工)
 
-    Step 1: 初始化
-    Step 2: 按时间逐 slot 逐区域处理
-    Step 3: 对每个 slot 执行:
-      a. 识别专业固定岗需求
-      b. 从专业员工池匹配（S/A 级 + 主区域 + 保护时段）
-      c. 校验区域保底
-      d. 剩余需求加入待分配池
-    Step 4: 对待分配任务排序（高峰 > 普通 > 低峰）
-    Step 5: 生成混排候选人池
-    Step 6: 对每个待分配任务:
-      a. 筛选合格候选人
-      b. 评分排序
-      c. 分配最优候选人
-    Step 7: 检测未满足需求 → 生成缺口
-    Step 8: 检测所有风险
-    Step 9: 计算 KPI
+    正式工 (regular) — 固定在 main_area 部门排班，三班制：
+      早班 8:00-16:00 (8小时)，晚班 14:00-22:00 (8小时)，两头班 8:00-12:00+17:00-21:00 (8小时)
+      调度优先级：周意愿(preferred_shift_type) > 默认班次(regular_shift_type: morning/evening/split/rotating)
+      轮班(rotating)员工由系统根据需求平衡分配
+
+    临时工 (temporary) — 跨部门混排：
+      工作日固定 18:00-21:00 (3小时)，周末根据忙碌程度决定 3-6 小时
+     每部门每天最多 1 班临时工 (max_temp_per_day) -> 已移除，无此约束
+      不分配专业任务 (is_professional=0)
+
+     Step 1: 初始化，按 employee_type 分离正式工和临时工
+     Step 2: 读取员工周意愿表，构建本周班次映射 {employee_id → effective_shift_type}
+       (优先使用周意愿，无意愿则用默认 regular_shift_type)
+     Step 2a: 休假冲突解决 — 读取员工周休假意愿表 (employee_weekly_leave)
+       a. 按天 × 区域汇总休假申请人数
+        b. 计算每个区域每天允许的最大休假人数：
+           某区域当天最大休假人数 = max(0, 该区域正式工人数 - max(各班次 baseline_min))
+           （max(0, …) 兜底，最小值 0；某天某区域最多保留 max(baseline_min) 名正式工在岗）
+       c. 按区域逐天检查：申请人数 ≤ 最大休假人数 → 全部批准
+       d. 如果超限，按 created_at 先后排序（先申请者优先），驳回超出部分的申请
+       e. 将最终结果写入 leave_resolution 表
+       f. 被批准的员工当天不参与排班
+     Step 3: 正式工排班 — 按部门 × 班次分配
+       a. 遍历每个部门，计算早班(8:00-16:00)、晚班(14:00-22:00)、两头班(8:00-12:00+17:00-21:00)的需求
+       b. 识别专业固定岗任务，仅由本部门 S/A 级正式工承担
+       c. 按 effective_shift_type 分配班次：morning→早班, evening→晚班, split→两头班, rotating→系统平衡分配
+       d. 对于当天休假的员工，跳过排班
+       e. 校验部门保底正式工人数，不足则标记风险
+      Step 4: 临时工排班 — 跨部门补位
+        a. 计算各部门正式工无法覆盖的时段缺口
+        b. （已移除"每部门每天最多 1 班"约束，不再截断；临时工按缺口需求全量参与补位）
+        c. 对每个缺口，确定工作时长：工作日固定 18:00-21:00（3小时），周末根据忙碌程度决定（3-6小时）
+      d. 从临时工池筛选候选人（技能满足、可用、未超工时、非专业任务）
+      e. 对候选人评分排序
+      f. 分配最优临时工
+    Step 5: 检测未满足需求 → 生成缺口
+    Step 6: 检测所有风险
+    Step 7: 计算 KPI
     """
 ```
 
@@ -789,12 +826,11 @@ def calculate_total_score(
     current_weekly_hours: float,   # 当前已排小时
     max_hours: int,                # 周工时上限
     is_peak_adapted: bool,         # 是否有高峰经验
-    area_impact: bool,             # 是否影响主区域保底
+    area_not_impacted: bool,       # 是否不影响主区域保底
     preference_match: bool,        # 是否匹配员工偏好
-    slot_hours: float              # 当前时段小时数
 ) -> float:
     """
-    候选人得分 = 各项加权和 - 风险扣分
+    候选人得分 = 各项加权和（无风险扣分；超工时为硬约束，不进入候选人列表）
 
     技能匹配分 (0-35):
       S→35, A→31.5, B→24.5, C→0
@@ -811,15 +847,15 @@ def calculate_total_score(
       is_peak_adapted → 10, else → 0
 
     主区域不受影响分 (0-15):
-      area_impact == True → 15, else → 0
+      area_not_impacted == True → 15, else → 0
 
     偏好匹配分 (0-5):
       preference_match → 5, else → 0
 
-    风险扣分:
-      超工时风险 → 扣 30（直接淘汰）
-      技能不足风险 → 扣 20
-      跨区频率过高 → 扣 5
+    风险（硬约束，无扣分）:
+      超过周工时上限的候选人直接不进入候选人列表（硬约束，由 §8.3 前置过滤，不在评分阶段扣分）
+      技能不足风险 → 提示（软约束，评分低但不排除）
+      跨区频率过高 → 提示（软约束）
     """
 ```
 
@@ -828,9 +864,9 @@ def calculate_total_score(
 | 约束类型 | 处理方式 | 违反后果 |
 | --- | --- | --- |
 | 专业岗资质 (硬) | 前置过滤，不满足直接排除 | 严重风险 |
-| 保护时段 (硬) | 前置过滤，保护时段内不推荐跨区 | 严重风险 |
 | 区域保底 (硬) | 分配时校验，抽走人员会破坏保底则拒绝 | 警告风险 |
 | 周工时上限 (硬) | 超过上限不进入候选人列表 | 标记超工时 |
+| 员工休假 (硬) | 休假优先级高于排班，休假员工当天不排班；同日休假超限则驳回 | 休假冲突风险 |
 | 技能匹配 (软) | 评分加权，低分不排除但提示风险 | 黄色提醒 |
 | 员工偏好 (软) | 评分加分项 | 不满足不扣分 |
 
@@ -864,7 +900,148 @@ def calculate_total_score(
 
 
 
-## 11. 非功能规格
+## 11. HC 优化引擎
+
+HC 优化（编制优化）能力根据历史排班与需求数据，动态调整各区域正式工（regular）/临时工（temporary）编制，在保障服务水平的前提下降低人力成本，实现成本与服务的平衡。优化结果以分区域、分员工类型的编制调整建议（HcSuggestion）形式输出，经人工确认后生效。
+
+### 11.1 数据输入与缺口分析
+
+HC 优化以历史排班与需求数据为依据，按「区域 + 技能」维度在 `horizon_weeks`（默认 12 周）时间窗内滚动统计。
+
+| 输入 | 来源 | 说明 |
+| --- | --- | --- |
+| demand_results | 运行时 SQLite | 历史需求结果，含区域、技能、时段、需求人数 |
+| schedule_items | 运行时 SQLite | 历史实际排班，含区域、技能、员工类型、实际工时 |
+| areas / area_tasks | 静态配置 | 区域与任务定义，用于分组聚合 |
+| horizon_weeks | 配置项 | 统计窗口（默认 12 周，见 §13.3） |
+
+三个核心指标定义如下：
+
+| 指标 | 定义 | 计算口径 |
+| --- | --- | --- |
+| 需求覆盖率 | 已覆盖需求数 / 总需求数 | `coverage_rate = covered_demand_count / total_demand_count`，目标 ≥ 阈值（如 0.95） |
+| 长期缺人时段占比 | 长期需求>覆盖且风险高发时段 / 总时段 | 窗口内某 (区域, 技能, 时段) 持续需求未被排班覆盖且风险高发，记为长期缺人 |
+| 长期冗余工时 | 排班覆盖远超需求的冗余工时 | 窗口内 `Σ(max(0, scheduled_hours - demand_hours))`，利用率低时计入 |
+
+### 11.2 成本模型
+
+采用相对权重成本模型，正式工按人数计（固定），临时工按实际使用工时计（弹性）。权重可在 §13.3 配置项中调整。
+
+| 参数 | 含义 | 默认值 |
+| --- | --- | --- |
+| C_reg | 正式工周成本权重（按人数计，固定） | 1.0 |
+| C_temp | 临时工周成本权重（按实际使用工时计，弹性） | 0.4 |
+
+周成本近似公式：
+
+```
+weekly_cost ≈ Σ(regular_count × C_reg) + Σ(temp_assigned_hours × C_temp)
+```
+
+其中 `regular_count` 为正式工人数，`temp_assigned_hours` 为临时工实际使用工时。成本比较以「当前编制」与「建议编制」的估算成本之差（`delta`）衡量优化收益。
+
+### 11.3 优化算法
+
+**服务水平约束**：专业岗覆盖 100%、区域保底满足、风险可控、需求覆盖率 ≥ 阈值（如 0.95）。任何建议不得突破上述约束。
+
+**目标函数**（成本—服务平衡）：
+
+```
+minimize  α · service_gap_penalty + β · total_cost
+```
+
+其中 `α`、`β` 为成本—服务平衡系数，体现对服务水平缺口与总成本的不同偏好。
+
+**分区域决策步骤**：
+
+```
+对每一区域 area：
+  1. 聚合该区域 demand_results 与 schedule_items，按技能维度计算
+     需求覆盖率、长期缺人时段占比、长期冗余工时。
+  2. 若 长期缺人（需求 > 排班覆盖 且 风险高发）：
+       → 建议增 HC（delta > 0）
+       → 优先以临时工填充波峰弹性缺口
+       → 核心缺口以正式工补充，保障专业岗与保底
+  3. 若 长期冗余（排班覆盖 >> 需求 且 工时利用率低）：
+       → 建议减 HC（delta < 0）
+       → 先减临时工弹性池
+       → 必要时减正式工
+  4. 在服务水平约束下比较 当前成本 / 建议成本，输出 delta。
+  5. 生成 HcSuggestion（见 §11.4）。
+```
+
+### 11.4 结构化输出 Schema
+
+```python
+from typing import List, Literal
+from pydantic import BaseModel, Field
+
+
+class HcSuggestion(BaseModel):
+    """HC 编制调整建议（单区域、单员工类型）"""
+
+    id: str = Field(description="建议唯一标识")
+    area_code: str = Field(description="区域编码")
+    area_name: str = Field(description="区域名称")
+    employee_type: Literal['regular', 'temporary'] = Field(
+        description="员工类型：regular 正式工 / temporary 临时工"
+    )
+    current_count: int = Field(description="当前编制人数（临时工指弹性池容量）")
+    suggested_count: int = Field(description="建议编制人数")
+    delta: int = Field(description="编制变化量（正负整数，suggested - current）")
+    reason: str = Field(description="建议文本说明")
+    est_cost_before: float = Field(description="估算当前周成本")
+    est_cost_after: float = Field(description="估算建议后周成本")
+
+
+class HcOptimizeResult(BaseModel):
+    """HC 优化顶层结果"""
+
+    generated_at: str = Field(description="生成时间（ISO 8601）")
+    horizon_weeks: int = Field(description="统计窗口周数")
+    suggestions: List[HcSuggestion] = Field(default=[], description="编制调整建议列表")
+    total_cost_before: float = Field(description="全局当前周成本合计")
+    total_cost_after: float = Field(description="全局建议后周成本合计")
+    summary: str = Field(description="整体优化摘要说明")
+```
+
+### 11.5 与排班引擎 / Agent 集成
+
+HC 优化作为与 `generate_schedule` 等并列的 Agent 工具接入编排层：
+
+| 项目 | 说明 |
+| --- | --- |
+| Agent 工具 | `hc_optimize(horizon_weeks?: int)` 返回 `HcOptimizeResult` |
+| API 端点 | `POST /api/hc/optimize`、`GET /api/hc/suggestions`、`POST /api/hc/suggestions/confirm` |
+| DB 表 | `hc_suggestions`（结构见下表） |
+
+**建议状态机**：
+
+```
+pending   → 建议生成（初始状态）
+approved  → 人工 confirm，生效：调整员工编制 / 种子数据
+rejected  → 人工 reject，丢弃该建议
+```
+
+确认生效（`POST /api/hc/suggestions/confirm`）后，系统依据 `approved` 建议的 `area_code`、`employee_type`、`suggested_count` 调整对应区域正式工/临时工编制与种子数据，使后续排班与成本模型基于新编制运行。
+
+**hc_suggestions 表**：
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| id | TEXT | PK |
+| area_code | TEXT | FK → areas |
+| employee_type | TEXT | CHECK('regular','temporary') |
+| current_count | INT | — |
+| suggested_count | INT | — |
+| delta | INT | — |
+| reason | TEXT | — |
+| cost_before | REAL | — |
+| cost_after | REAL | — |
+| status | TEXT | CHECK('pending','approved','rejected') DEFAULT 'pending' |
+| created_at | TEXT | — |
+
+## 12. 非功能规格
 
 | 维度 | 要求 |
 | --- | --- |
@@ -875,9 +1052,9 @@ def calculate_total_score(
 
 ---
 
-## 12. 部署与运维
+## 13. 部署与运维
 
-### 12.1 本地运行
+### 13.1 本地运行
 
 ```bash
 # 前端
@@ -891,7 +1068,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload    # 默认 http://localhost:8000
 ```
 
-### 12.2 环境变量配置
+### 13.2 环境变量配置
 
 ```bash
 # LLM 配置
@@ -907,9 +1084,13 @@ SQLITE_PATH=backend/app/data/demo.sqlite
 SEED_DATA_PATH=backend/app/seed
 
 # 排班参数
-WEEK_HOURS_LIMIT=40                    # 周工时上限
-AREA_BASELINE_MIN=2                    # 区域保底最少
-AREA_BASELINE_MAX=3                    # 区域保底最多
+WEEK_HOURS_LIMIT=48                    # 周工时上限（正式工，6天×8h）
+TEMP_WEEK_HOURS_LIMIT=32               # 周工时上限（临时工）
+AREA_BASELINE_MIN=2                    # 区域保底最少正式工人数
+AREA_BASELINE_MAX=3                    # 区域保底最多正式工人数
+TEMP_WEEKDAY_HOURS=3                   # 临时工工作日固定时长（18:00-21:00）
+TEMP_WEEKEND_MIN_HOURS=3               # 临时工周末每班最少时长（小时）
+TEMP_WEEKEND_MAX_HOURS=6               # 临时工周末每班最多时长（小时）
 
 # 影响因子系数
 HOLIDAY_FACTOR=1.2                     # 节假日系数
@@ -919,15 +1100,23 @@ RAIN_FACTOR_STORE=0.9                 # 降雨到店系数
 PROMOTION_FACTOR=1.3                  # 促销系数（默认）
 ```
 
-### 12.3 配置管理
+### 13.3 配置管理
 
 所有配置通过 `app/core/config.py`（Pydantic Settings）统一管理，支持 `.env` 文件覆盖。
 
+HC 优化相关配置项：
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| HC_COST_WEIGHT_REG | 1.0 | 正式工相对成本权重（按人数计，固定） |
+| HC_COST_WEIGHT_TEMP | 0.4 | 临时工相对成本权重（按实际使用工时计，弹性） |
+| HC_OPTIMIZE_HORIZON_WEEKS | 12 | HC 优化统计窗口周数（见 §11.1） |
+
 ---
 
-## 13. 依赖清单
+## 14. 依赖清单
 
-### 13.1 前端依赖
+### 14.1 前端依赖
 
 ```json
 {
@@ -962,7 +1151,7 @@ PROMOTION_FACTOR=1.3                  # 促销系数（默认）
 }
 ```
 
-### 13.2 后端依赖
+### 14.2 后端依赖
 
 ```txt
 fastapi==0.110.*
@@ -982,9 +1171,9 @@ httpx==0.26.*
 
 ---
 
-## 14. 附录
+## 15. 附录
 
-### 14.1 架构决策记录 (ADR)
+### 15.1 架构决策记录 (ADR)
 
 | ADR | 标题 | 决策 | 理由 |
 | --- | --- | --- | --- |

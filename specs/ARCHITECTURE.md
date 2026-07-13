@@ -17,6 +17,10 @@
 | 版本 | 日期 | 修订内容 | 修订人 |
 | --- | --- | --- | --- |
 | v1.0 | 2026-07-12 | 初始版本 | — |
+| v1.1 | 2026-07-13 | employee_type 更新为 regular/temporary，排班流程区分正式工两班制和临时工混排 | — |
+| v1.2 | 2026-07-13 | 正式工新增两头班(8:00-12:00,17:00-21:00)、新增员工周意愿数据流，临时工工作日固定18:00-21:00、周末灵活 | — |
+| v1.3 | 2026-07-13 | 新增正式工周休假数据流（employee_weekly_leave + leave_resolution），排班算法加入休假冲突解决 | — |
+| v1.4 | 2026-07-13 | 新增 HC 优化引擎与 /api/hc/* 端点（optimize / suggestions / confirm）、hc_suggestions 表；端点 /api/agent/message 统一为 /api/agent/chat | — |
 
 ---
 
@@ -78,13 +82,14 @@ flowchart TD
 
     subgraph 服务端
         API[FastAPI 容器<br/>Python FastAPI]
-        subgraph API内部
-            API_ROUTES[API 路由层]
-            AGENT_CTN[LLM Agent 编排容器]
-            DEMAND_CTN[需求计算容器<br/>Pandas]
-            ENGINE_CTN[排班引擎容器]
-            DATA_CTN[数据访问容器]
-        end
+    subgraph API内部
+        API_ROUTES[API 路由层]
+        AGENT_CTN[LLM Agent 编排容器]
+        DEMAND_CTN[需求计算容器<br/>Pandas]
+        ENGINE_CTN[排班引擎容器]
+        HC_CTN[HC 优化容器]
+        DATA_CTN[数据访问容器]
+    end
     end
 
     subgraph 数据存储
@@ -102,6 +107,8 @@ flowchart TD
     API_ROUTES --> ENGINE_CTN
     AGENT_CTN -->|工具调用| DEMAND_CTN
     AGENT_CTN -->|工具调用| ENGINE_CTN
+    AGENT_CTN -->|工具调用| HC_CTN
+    HC_CTN --> DATA_CTN
     AGENT_CTN -->|LLM 调用| LLM
     DEMAND_CTN --> CSV
     ENGINE_CTN --> DATA_CTN
@@ -117,7 +124,8 @@ flowchart TD
 | FastAPI 容器 | Python FastAPI + Pydantic | REST API 服务、请求校验、响应序列化 |
 | LLM Agent 编排容器 | Python | 意图识别、工具调用编排、解释生成 |
 | 需求计算容器 | Python + Pandas | 历史数据聚合、影响因子计算、需求人数生成 |
-| 排班引擎容器 | Python | 专业岗锁定、混排池管理、候选人评分、风险检测 |
+| 排班引擎容器 | Python | 专业岗锁定、临时工池管理、候选人评分、风险检测 |
+| HC 优化容器 | Python | 历史缺口分析、成本模型、编制调整建议生成 |
 | 数据访问容器 | Python + SQLite | SQLite CRUD 封装 |
 | CSV/JSON 文件 | CSV / JSON | 静态样例数据（只读） |
 | SQLite 数据库 | SQLite 3 | 运行时数据持久化（读写） |
@@ -192,6 +200,7 @@ flowchart TD
         SCHED_API[ScheduleAPI]
         AGENT_API[AgentAPI]
         DEMO_API[DemoAPI]
+        HC_API[HcApi]
     end
 
     subgraph Service_Layer
@@ -199,6 +208,7 @@ flowchart TD
         SCHED_SVC[ScheduleService]
         KPI_SVC[KpiService]
         INTERV_SVC[InterventionService]
+        HC_SVC[HcService]
     end
 
     subgraph Agent_Layer
@@ -213,6 +223,7 @@ flowchart TD
         RULES[RulesEngine]
         SCORER[CandidateScorer]
         RISKS[RiskDetector]
+        HC_ENG[HcEngine]
     end
 
     subgraph Data_Layer
@@ -230,6 +241,7 @@ flowchart TD
     SCHED_API --> AGENT_SVC
     AGENT_API --> AGENT_SVC
     DEMO_API --> SEED
+    HC_API --> HC_SVC
 
     %% Agent 层调用关系
     AGENT_SVC --> PROVIDER
@@ -239,6 +251,7 @@ flowchart TD
     TOOLS --> GENERATOR
     TOOLS --> RULES
     TOOLS --> KPI_SVC
+    TOOLS --> HC_SVC
 
     %% 服务层调用关系
     DEMAND_SVC --> CSV
@@ -246,6 +259,8 @@ flowchart TD
     SCHED_SVC --> STORE
     KPI_SVC --> STORE
     INTERV_SVC --> STORE
+    HC_SVC --> HC_ENG
+    HC_ENG --> STORE
 
     %% 引擎层调用关系
     GENERATOR --> RULES
@@ -283,7 +298,7 @@ sequenceDiagram
     Note over API: 创建版本 ID: sch_{uuid}
 
     API->>AG: handle_intent("generate", store, week)
-    AG->>AG: 意图识别 → INTENT_GENERATE
+    AG->>AG: 意图识别 → generate_schedule
 
     AG->>DE: get_historical_summary(store, week)
     DE->>DE: Pandas 读取 CSV 聚合分析
@@ -293,12 +308,13 @@ sequenceDiagram
     DE->>DE: 叠加影响因子 → 生成需求
     DE-->>AG: List[DemandResult]
 
-    AG->>GE: generate_schedule(demands, employees, rules)
-    GE->>GE: Step 1: 锁定专业固定岗
-    GE->>GE: Step 2: 校验区域保底
-    GE->>GE: Step 3: 生成混排池
-    GE->>GE: Step 4: 候选人评分排序
-    GE->>GE: Step 5: 分配混排任务
+    AG->>GE: generate_schedule(demands, employees, rules, weekly_preferences, weekly_leave)
+    GE->>GE: Step 1: 分离正式工/临时工，读取周意愿
+    GE->>GE: Step 2: 正式工排班（按周意愿+默认班次分配三班，锁定专业岗）
+    GE->>GE: Step 2a: 休假冲突解决（读取 leave_preferences，按日统计，驳回超限申请）
+    GE->>GE: Step 3: 校验部门保底正式工人数（扣除休假后）
+    GE->>GE: Step 4: 临时工排班（按缺口×部门名额分配，工作日固定18-21，周末灵活）
+    GE->>GE: Step 5: 候选人评分排序
     GE->>GE: Step 6: 检测风险
     GE-->>AG: ScheduleResult
 
@@ -405,16 +421,16 @@ sequenceDiagram
 
     U->>W: 输入"周五晚高峰果蔬缺人，谁能支援？"
     W->>W: 显示 loading 气泡
-    W->>API: POST /api/agent/message
+    W->>API: POST /api/agent/chat
     Note over API: {version_id, message, context}
 
     API->>AG: handle_message(message, context)
 
     AG->>AG: 意图识别
-    Note over AG: user_message + context → INTENT_RECOMMEND_SUPPORT
+    Note over AG: user_message + context → recommend_support
 
     AG->>EN: 查询缺口数据
-    EN-->>AG: GapInfo(date=Friday, slot=17-19, area=produce, gap=1)
+    EN-->>AG: GapInfo(date=Friday, slot=16-18, area=produce, gap=1)
 
     AG->>EN: 查询候选池 + 评分
     EN->>EN: CandidateScorer.rank_candidates()
@@ -470,6 +486,45 @@ sequenceDiagram
 
 ---
 
+### 5.5 HC 优化流程
+
+```mermaid
+sequenceDiagram
+    participant U as 店长
+    participant W as 前端
+    participant API as FastAPI
+    participant AG as AgentService
+    participant TO as AgentTools
+    participant HC as HcEngine
+    participant DB as SQLite
+
+    U->>W: 点击"查看 HC 优化建议"
+    W->>API: POST /api/hc/optimize
+    Note over API: 可选 horizon_weeks（默认 12）
+
+    API->>AG: handle_intent("hc_optimize")
+    AG->>TO: hc_optimize(horizon_weeks?)
+    TO->>HC: analyze(demands, schedules, horizon)
+
+    HC->>HC: 按区域/员工类型聚合历史缺口
+    HC->>HC: 成本模型（C_reg=1.0 / C_temp=0.4）估算前后成本
+    HC->>HC: 生成分区域、分类型编制建议（delta + reason）
+    HC->>DB: 写入 hc_suggestions（status=pending）
+    HC-->>TO: HcOptimizeResult
+
+    TO-->>AG: HcOptimizeResult
+    AG-->>API: AgentResponse
+    API-->>W: HcOptimizeResult（建议 + 成本前后对比）
+
+    W->>U: 展示建议列表与成本趋势
+
+    U->>W: 确认某条建议
+    W->>API: POST /api/hc/suggestions/confirm
+    API->>DB: 更新 hc_suggestions status=approved
+    API-->>W: {status: "approved"}
+```
+
+---
 ## 6. 数据流设计
 
 ### 6.1 排班生成数据流
@@ -483,10 +538,12 @@ flowchart TD
     WEATHER --> PROMO[促销因子叠加]
     PROMO --> DEMAND[需求人数生成]
 
-    DEMAND --> LOCK[专业岗锁定]
-    JSON[JSON 配置数据] --> LOCK
+    DEMAND --> LEAVE[休假冲突解决]
+    JSON[JSON 配置数据] --> LEAVE
+    LEAVE --> LOCK[专业岗锁定]
+    JSON --> LOCK
     LOCK --> BASELINE_CHECK[区域保底校验]
-    BASELINE_CHECK --> POOL[混排池生成]
+    BASELINE_CHECK --> POOL[临时工池生成]
     JSON --> POOL
     POOL --> SCORE[候选人评分]
     SCORE --> ASSIGN[混排分配]
@@ -517,6 +574,19 @@ flowchart LR
 
 ---
 
+### 6.3 HC 优化数据流
+
+```mermaid
+flowchart LR
+    DEMAND[demand_results 历史] --> GAP[缺口分析]
+    SCHED[schedule_items 历史] --> GAP
+    GAP --> COST[成本模型<br/>C_reg=1.0 / C_temp=0.4]
+    COST --> SUGGEST[HcSuggestion 生成<br/>current/suggested/delta]
+    SUGGEST --> STORE[(hc_suggestions 表<br/>status: pending)]
+    STORE --> CONFIRM[店长确认<br/>approved / rejected]
+```
+
+---
 ## 7. 部署架构
 
 ### 7.1 本地开发部署
@@ -555,9 +625,9 @@ flowchart LR
 
 ---
 
-## 10. 扩展性设计
+## 8. 扩展性设计
 
-### 10.1 扩展点
+### 8.1 扩展点
 
 | 扩展方向 | 当前预留 | 扩展方式 |
 | --- | --- | --- |
@@ -573,9 +643,9 @@ flowchart LR
 
 ---
 
-## 12. 性能架构
+## 9. 性能架构
 
-### 12.1 缓存策略
+### 9.1 缓存策略
 
 | 缓存对象 | 缓存位置 | 失效策略 | 说明 |
 | --- | --- | --- | --- |
@@ -586,7 +656,7 @@ flowchart LR
 | 排班版本 | React Query | 5 分钟后失效 | 修改后立即刷新 |
 | Agent 响应 | 不缓存 | — | 每次独立请求 |
 
-### 12.2 性能优化措施
+### 9.2 性能优化措施
 
 | 措施 | 说明 |
 | --- | --- |

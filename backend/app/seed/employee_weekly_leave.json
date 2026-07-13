@@ -1,0 +1,562 @@
+[
+  {
+    "id": "lv_0001",
+    "employee_id": "emp_001",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0002",
+    "employee_id": "emp_002",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0003",
+    "employee_id": "emp_003",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0004",
+    "employee_id": "emp_004",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0005",
+    "employee_id": "emp_005",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0006",
+    "employee_id": "emp_006",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0007",
+    "employee_id": "emp_007",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0008",
+    "employee_id": "emp_008",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0009",
+    "employee_id": "emp_010",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0010",
+    "employee_id": "emp_011",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0011",
+    "employee_id": "emp_012",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0012",
+    "employee_id": "emp_013",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0013",
+    "employee_id": "emp_014",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0014",
+    "employee_id": "emp_015",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0015",
+    "employee_id": "emp_016",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0016",
+    "employee_id": "emp_017",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0017",
+    "employee_id": "emp_019",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0018",
+    "employee_id": "emp_020",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0019",
+    "employee_id": "emp_021",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0020",
+    "employee_id": "emp_022",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Tuesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0021",
+    "employee_id": "emp_023",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0022",
+    "employee_id": "emp_026",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0023",
+    "employee_id": "emp_027",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0024",
+    "employee_id": "emp_028",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0025",
+    "employee_id": "emp_029",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0026",
+    "employee_id": "emp_030",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0027",
+    "employee_id": "emp_031",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Wednesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0028",
+    "employee_id": "emp_032",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0029",
+    "employee_id": "emp_033",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0030",
+    "employee_id": "emp_034",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Thursday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0031",
+    "employee_id": "emp_035",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Thursday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0032",
+    "employee_id": "emp_036",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0033",
+    "employee_id": "emp_037",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0034",
+    "employee_id": "emp_038",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Sunday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0035",
+    "employee_id": "emp_039",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Saturday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0036",
+    "employee_id": "emp_040",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Sunday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0037",
+    "employee_id": "emp_041",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Sunday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0038",
+    "employee_id": "emp_042",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0039",
+    "employee_id": "emp_043",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Sunday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0040",
+    "employee_id": "emp_045",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0041",
+    "employee_id": "emp_046",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0042",
+    "employee_id": "emp_047",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Thursday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0043",
+    "employee_id": "emp_049",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Tuesday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0044",
+    "employee_id": "emp_050",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0045",
+    "employee_id": "emp_051",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0046",
+    "employee_id": "emp_052",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Thursday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0047",
+    "employee_id": "emp_053",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Sunday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0048",
+    "employee_id": "emp_054",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0049",
+    "employee_id": "emp_055",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0050",
+    "employee_id": "emp_056",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0051",
+    "employee_id": "emp_058",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Sunday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0052",
+    "employee_id": "emp_059",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0053",
+    "employee_id": "emp_060",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0054",
+    "employee_id": "emp_061",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Sunday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0055",
+    "employee_id": "emp_062",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0056",
+    "employee_id": "emp_063",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Sunday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0057",
+    "employee_id": "emp_064",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Saturday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0058",
+    "employee_id": "emp_065",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0059",
+    "employee_id": "emp_066",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0060",
+    "employee_id": "emp_067",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Saturday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0061",
+    "employee_id": "emp_068",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Saturday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0062",
+    "employee_id": "emp_069",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0063",
+    "employee_id": "emp_070",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0064",
+    "employee_id": "emp_071",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Thursday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0065",
+    "employee_id": "emp_072",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Saturday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0066",
+    "employee_id": "emp_073",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0067",
+    "employee_id": "emp_074",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0068",
+    "employee_id": "emp_075",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Saturday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0069",
+    "employee_id": "emp_076",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0070",
+    "employee_id": "emp_078",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0071",
+    "employee_id": "emp_079",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0072",
+    "employee_id": "emp_080",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0073",
+    "employee_id": "emp_082",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0074",
+    "employee_id": "emp_083",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0075",
+    "employee_id": "emp_084",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0076",
+    "employee_id": "emp_085",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0077",
+    "employee_id": "emp_086",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Friday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0078",
+    "employee_id": "emp_087",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Monday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0079",
+    "employee_id": "emp_088",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Thursday",
+    "created_at": "2026-07-10T08:00:00Z"
+  },
+  {
+    "id": "lv_0080",
+    "employee_id": "emp_089",
+    "week_start": "2026-07-13",
+    "preferred_day_off": "Saturday",
+    "created_at": "2026-07-10T08:00:00Z"
+  }
+]

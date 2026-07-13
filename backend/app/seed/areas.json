@@ -2,7 +2,7 @@
   {
     "code": "aquatic",
     "name": "水产区",
-    "allow_mixed": false,
+    "allow_mixed": true,
     "baseline_min": 2,
     "baseline_max": 3,
     "sort_order": 1
@@ -10,7 +10,7 @@
   {
     "code": "meat",
     "name": "肉类区",
-    "allow_mixed": false,
+    "allow_mixed": true,
     "baseline_min": 2,
     "baseline_max": 3,
     "sort_order": 2
