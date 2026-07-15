@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
 from app.core.config import get_settings
 from app.data.store import SQLiteStore
-from app.engine.scheduling import SchedulingGenerator
+from app.engine.scheduling import SKILL_RANK, SchedulingGenerator
 from app.models.schemas import (
     GenerateScheduleRequest,
+    LeavePreferenceUpdateRequest,
     ModifyScheduleRequest,
     ModifyScheduleResponse,
     ScheduleResponse,
@@ -32,6 +34,7 @@ class ScheduleService:
         self._validate_generation_request(request)
         demand_results, insights = self.demand_service.calculate_week(request.week_start)
         payload = self.generator.generate(request.week_start, demand_results)
+        payload = self._merge_frozen_schedule(request, payload)
         payload["demand_insights"] = insights
         self.store.save_version(payload)
         return ScheduleResponse(**payload)
@@ -55,6 +58,9 @@ class ScheduleService:
                     "area_code",
                     "area_name",
                     "required_count",
+                    "professional_required_count",
+                    "regular_required_count",
+                    "temporary_required_count",
                     "demand_score",
                     "demand_factors",
                     "priority",
@@ -182,6 +188,186 @@ class ScheduleService:
             return None
         return self.store.interventions(version_id)
 
+    def regular_employees(self) -> list[dict[str, Any]]:
+        areas = self.generator.areas
+        employees = [
+            {
+                "employee_id": employee["id"],
+                "employee_name": employee["name"],
+                "area_code": employee["main_area"],
+                "area_name": areas[employee["main_area"]]["name"],
+                "is_protected": employee.get("is_protected", 0),
+            }
+            for employee in self.generator.employees.values()
+            if employee["employee_type"] == "regular" and employee["is_active"]
+        ]
+        return sorted(employees, key=lambda row: (AREA_SORT_ORDER.get(row["area_code"], 99), -row["is_protected"], row["employee_id"]))
+
+    def upsert_leave_preference(self, request: LeavePreferenceUpdateRequest) -> dict[str, Any]:
+        employee = self.generator.employees.get(request.employee_id)
+        if not employee or employee["employee_type"] != "regular":
+            raise ValueError("EMPLOYEE_NOT_FOUND")
+        start = datetime.strptime(request.week_start, "%Y-%m-%d").date()
+        if start.weekday() != 0:
+            raise ValueError("INVALID_WEEK_START")
+        requested_date = self._day_off_date(request.week_start, request.preferred_day_off)
+        if requested_date <= self._business_today():
+            raise ValueError("LEAVE_TOO_LATE")
+
+        rows = self.generator.seed["employee_weekly_leave"]
+        original_rows = [dict(row) for row in rows]
+        candidate_rows = [dict(row) for row in rows]
+        self._apply_leave_preference(candidate_rows, request)
+
+        self.generator.seed["employee_weekly_leave"] = candidate_rows
+        try:
+            demand_results, _ = self.demand_service.calculate_week(request.week_start)
+            feasibility_issues = self._leave_feasibility_issues(
+                request,
+                employee,
+                requested_date,
+                candidate_rows,
+                demand_results,
+            )
+            if feasibility_issues:
+                raise ValueError(f"LEAVE_REJECTED:{feasibility_issues[0]}")
+            simulation = self.generator.generate(request.week_start, demand_results)
+            requested_key = (requested_date.isoformat(), employee["main_area"])
+            approved_on_requested_day = request.employee_id in self.generator.resolve_leave(request.week_start).get(requested_key, set())
+            if not approved_on_requested_day:
+                raise ValueError("LEAVE_REJECTED:该休假会导致同区域当天可用人员低于预测需求，系统不批准。")
+            if simulation["kpis"]["professional_coverage_rate"] < 1 or simulation["kpis"]["baseline_achievement_rate"] < 1:
+                raise ValueError("LEAVE_REJECTED:模拟重排后无法满足专业岗或区域保底，系统不批准。")
+        except Exception:
+            self.generator.seed["employee_weekly_leave"] = original_rows
+            raise
+
+        rows[:] = candidate_rows
+        row = next(
+            item
+            for item in rows
+            if item["employee_id"] == request.employee_id and item["week_start"] == request.week_start
+        )
+        self.generator.seed["employee_weekly_leave"] = rows
+
+        leave_file = self.generator.seed_loader.seed_dir / "employee_weekly_leave.json"
+        with leave_file.open("w", encoding="utf-8") as file:
+            json.dump(rows, file, ensure_ascii=False, indent=2)
+
+        return {
+            **row,
+            "employee_name": employee["name"],
+            "area_code": employee["main_area"],
+            "area_name": self.generator.areas[employee["main_area"]]["name"],
+            "effective_date": requested_date.isoformat(),
+            "message": "休假申请已保存，重新生成班表时会从休假日开始重排，之前日期保持不变。",
+        }
+
+    def _apply_leave_preference(
+        self,
+        rows: list[dict[str, Any]],
+        request: LeavePreferenceUpdateRequest,
+    ) -> None:
+        existing = next(
+            (
+                row
+                for row in rows
+                if row["employee_id"] == request.employee_id and row["week_start"] == request.week_start
+            ),
+            None,
+        )
+        created_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        if existing:
+            existing["preferred_day_off"] = request.preferred_day_off
+            existing["created_at"] = created_at
+        else:
+            rows.append({
+                "id": f"lv_{len(rows) + 1:04d}",
+                "employee_id": request.employee_id,
+                "week_start": request.week_start,
+                "preferred_day_off": request.preferred_day_off,
+                "created_at": created_at,
+            })
+
+    def _leave_feasibility_issues(
+        self,
+        request: LeavePreferenceUpdateRequest,
+        employee: dict[str, Any],
+        requested_date: date,
+        candidate_rows: list[dict[str, Any]],
+        demand_results: list[dict[str, Any]],
+    ) -> list[str]:
+        area_code = employee["main_area"]
+        leave_ids = self._leave_employee_ids_for_date(request.week_start, requested_date, area_code, candidate_rows)
+        active_regular_ids = {
+            emp["id"]
+            for emp in self.generator.employees.values()
+            if emp["employee_type"] == "regular"
+            and emp["main_area"] == area_code
+            and emp["is_active"]
+        }
+        available_regular_ids = active_regular_ids - leave_ids
+        issues: list[str] = []
+
+        area_demands = [
+            row
+            for row in demand_results
+            if row["date"] == requested_date.isoformat() and row["area_code"] == area_code
+        ]
+        max_regular_required = max((row.get("regular_required_count", 0) for row in area_demands), default=0)
+        if len(available_regular_ids) < max_regular_required:
+            issues.append(
+                f"{requested_date.isoformat()} {self.generator.areas[area_code]['name']}预测至少需要{max_regular_required}名普通正式工，扣除请假后仅剩{len(available_regular_ids)}名。"
+            )
+
+        for demand in area_demands:
+            professional_required = demand.get("professional_required_count", 0)
+            if professional_required <= 0:
+                continue
+            qualified_available = self._qualified_available_professionals(
+                area_code,
+                demand["task_code"],
+                available_regular_ids,
+            )
+            if qualified_available < professional_required:
+                issues.append(
+                    f"{requested_date.isoformat()} {demand['slot']} {demand['area_name']}{demand['task_name']}预测需要{professional_required}名专业师傅，扣除请假后仅剩{qualified_available}名。"
+                )
+
+        return issues
+
+    def _leave_employee_ids_for_date(
+        self,
+        week_start: str,
+        requested_date: date,
+        area_code: str,
+        rows: list[dict[str, Any]],
+    ) -> set[str]:
+        leave_ids: set[str] = set()
+        for row in rows:
+            if row["week_start"] != week_start:
+                continue
+            emp = self.generator.employees.get(row["employee_id"])
+            if not emp or emp["main_area"] != area_code:
+                continue
+            if self._day_off_date(week_start, row["preferred_day_off"]) == requested_date:
+                leave_ids.add(row["employee_id"])
+        return leave_ids
+
+    def _qualified_available_professionals(
+        self,
+        area_code: str,
+        task_code: str,
+        available_regular_ids: set[str],
+    ) -> int:
+        task = self.generator.tasks[(area_code, task_code)]
+        count = 0
+        for employee_id in available_regular_ids:
+            skill = self.generator.skills.get((employee_id, area_code, task_code))
+            if skill and SKILL_RANK[skill["skill_level"]] >= SKILL_RANK[task["min_skill_level"]]:
+                count += 1
+        return count
+
     def _validate_generation_request(self, request: GenerateScheduleRequest) -> None:
         if request.store_id != self.settings.store_id:
             raise ValueError("STORE_NOT_FOUND")
@@ -208,3 +394,64 @@ class ScheduleService:
             reason_text=request.reason_text,
             created_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         )
+
+    def _merge_frozen_schedule(
+        self,
+        request: GenerateScheduleRequest,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        previous = self.store.get_latest_version(request.store_id, request.week_start)
+        freeze_before = self._freeze_before_date(request, bool(previous))
+        if not previous or not freeze_before:
+            return payload
+
+        frozen_items = [
+            {**item, "version_id": payload["version_id"]}
+            for item in previous["schedule_items"]
+            if datetime.strptime(item["date"], "%Y-%m-%d").date() < freeze_before
+        ]
+        regenerated_items = [
+            item
+            for item in payload["schedule_items"]
+            if datetime.strptime(item["date"], "%Y-%m-%d").date() >= freeze_before
+        ]
+        merged_items = []
+        for index, item in enumerate(frozen_items + regenerated_items, 1):
+            merged_items.append({**item, "id": f"si_{index:04d}", "version_id": payload["version_id"]})
+        payload["schedule_items"] = merged_items
+        payload["risks"] = self.generator.detect_risks(payload["version_id"], payload["demand_results"], merged_items)
+        payload["kpis"] = self.generator.calculate_kpis(payload["demand_results"], merged_items, payload["risks"], 0).model_dump()
+        payload["agent_summary"] = (
+            f"{payload['agent_summary']} 已冻结{freeze_before.isoformat()}之前的既有排班，仅重排可调整日期。"
+        )
+        return payload
+
+    def _freeze_before_date(self, request: GenerateScheduleRequest, has_previous: bool) -> date | None:
+        start = datetime.strptime(request.week_start, "%Y-%m-%d").date()
+        end = start + timedelta(days=6)
+        if request.reschedule_from:
+            freeze_before = datetime.strptime(request.reschedule_from, "%Y-%m-%d").date()
+            if start <= freeze_before <= end:
+                return freeze_before
+        today = self._business_today()
+        if has_previous and start <= today <= end:
+            return today
+        return None
+
+    def _business_today(self) -> date:
+        return datetime.strptime(self.settings.business_today, "%Y-%m-%d").date()
+
+    def _day_off_date(self, week_start: str, day_off: str) -> date:
+        start = datetime.strptime(week_start, "%Y-%m-%d").date()
+        return start + timedelta(days=WEEKDAY_NAMES.index(day_off))
+
+
+AREA_SORT_ORDER = {
+    "aquatic": 1,
+    "meat": 2,
+    "produce": 3,
+    "cashier": 4,
+    "replenishment": 5,
+}
+
+WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]

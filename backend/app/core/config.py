@@ -9,6 +9,7 @@ class Settings(BaseModel):
     api_prefix: str = "/api"
     store_id: str = "fresh_store_001"
     store_name: str = "社区生鲜示范店"
+    business_today: str = "2026-07-15"
     base_dir: Path = Path(__file__).resolve().parents[1]
 
     @property
@@ -23,8 +24,11 @@ class Settings(BaseModel):
     def database_path(self) -> Path:
         return self.data_dir / "demo.sqlite"
 
+    @property
+    def llm_config_path(self) -> Path:
+        return self.base_dir.parent / "config" / "llm.json"
+
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-

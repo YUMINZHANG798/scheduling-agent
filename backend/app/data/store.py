@@ -264,6 +264,21 @@ class SQLiteStore:
             "intervention_count": interventions,
         }
 
+    def get_latest_version(self, store_id: str, week_start: str) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id FROM schedule_versions
+                WHERE store_id = ? AND week_start = ?
+                ORDER BY generated_at DESC
+                LIMIT 1
+                """,
+                (store_id, week_start),
+            ).fetchone()
+        if not row:
+            return None
+        return self.get_version(row["id"])
+
     def update_schedule_item(self, version_id: str, item_id: str, item: dict[str, Any]) -> None:
         with self.connect() as conn:
             conn.execute(
@@ -308,4 +323,3 @@ class SQLiteStore:
             }
             for row in rows
         ]
-

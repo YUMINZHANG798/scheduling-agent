@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from statistics import mean
 from typing import Any
 
@@ -75,6 +75,7 @@ class DemandService:
                     task = self._pick_task(area_code, slot, score)
                     final_score = min(100, round(score))
                     required_count = self._required_count(area, final_score, task["is_professional"])
+                    labor_breakdown = self._labor_breakdown(area, task, final_score, required_count)
                     demand_results.append(
                         {
                             "id": f"dr_{seq:04d}",
@@ -86,6 +87,7 @@ class DemandService:
                             "task_code": task["task_code"],
                             "task_name": task["task_name"],
                             "required_count": required_count,
+                            **labor_breakdown,
                             "demand_score": final_score,
                             "demand_factors": factors,
                             "priority": "high" if final_score >= 78 else ("medium" if final_score >= 55 else "low"),
@@ -104,6 +106,9 @@ class DemandService:
                     "area_code": row["area_code"],
                     "area_name": row["area_name"],
                     "required_count": row["required_count"],
+                    "professional_required_count": row["professional_required_count"],
+                    "regular_required_count": row["regular_required_count"],
+                    "temporary_required_count": row["temporary_required_count"],
                     "demand_score": row["demand_score"],
                     "demand_factors": row["demand_factors"],
                     "priority": row["priority"],
@@ -205,3 +210,29 @@ class DemandService:
         if score >= 45:
             return int(area["baseline_min"])
         return max(1, int(area["baseline_min"]) - 1)
+
+    def _labor_breakdown(
+        self,
+        area: dict[str, Any],
+        task: dict[str, Any],
+        score: int,
+        required_count: int,
+    ) -> dict[str, int]:
+        baseline_min = int(area["baseline_min"])
+        if task["is_professional"]:
+            professional_required = required_count
+            return {
+                "professional_required_count": professional_required,
+                "regular_required_count": max(0, baseline_min - professional_required),
+                "temporary_required_count": 0,
+            }
+
+        regular_required = baseline_min
+        temporary_required = max(0, required_count - regular_required)
+        if score >= 86:
+            temporary_required = max(1, temporary_required)
+        return {
+            "professional_required_count": 0,
+            "regular_required_count": regular_required,
+            "temporary_required_count": temporary_required,
+        }

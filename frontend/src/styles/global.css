@@ -48,7 +48,7 @@ h3 { font-size: 13px; color: #52616b; }
   font-size: 13px;
 }
 
-.primary-button, .icon-button, .quick-row button {
+.primary-button, .icon-button {
   border: 0;
   border-radius: 8px;
   min-height: 38px;
@@ -162,7 +162,7 @@ h3 { font-size: 13px; color: #52616b; }
   padding: 2px 6px;
 }
 
-.area-list, .assignment-list, .chat-list, .candidate-list, .risk-list, .insight-list {
+.area-list, .assignment-list, .chat-list, .risk-list, .insight-list {
   display: grid;
   gap: 8px;
 }
@@ -183,6 +183,97 @@ h3 { font-size: 13px; color: #52616b; }
 }
 .area-row strong { grid-column: 1 / -1; }
 .area-row span { color: #60717a; }
+
+.leave-panel {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid #edf2f1;
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.leave-panel label {
+  display: grid;
+  gap: 5px;
+  color: #52616b;
+  font-size: 12px;
+}
+
+.leave-panel select {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid #d9e4e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1f2933;
+  padding: 0 9px;
+}
+
+.leave-panel > button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  background: #176b5c;
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.leave-panel > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.leave-notice {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 8px;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.leave-notice.success {
+  border: 1px solid #b7dfc3;
+  background: #edf8f0;
+  color: #1f6f3a;
+}
+
+.leave-notice.error {
+  border: 1px solid #ffc9c9;
+  background: #fff5f5;
+  color: #9b1c1c;
+}
+
+.leave-notice strong {
+  display: block;
+  margin-bottom: 3px;
+}
+
+.leave-notice p {
+  margin: 0;
+  color: inherit;
+}
+
+.leave-notice button {
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.leave-panel > p {
+  color: #60717a;
+  font-size: 12px;
+  line-height: 1.45;
+}
 
 .week-board {
   display: grid;
@@ -214,17 +305,16 @@ h3 { font-size: 13px; color: #52616b; }
 .assignment span { color: #60717a; }
 .assignment-time { font-variant-numeric: tabular-nums; }
 
-.quick-row {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
+.chat-window {
+  display: grid;
+  gap: 10px;
 }
-.quick-row button {
-  background: #edf5f3;
-  color: #176b5c;
-  padding: 0 10px;
-  font-size: 12px;
+
+.agent-panel .chat-list {
+  max-height: 520px;
+  min-height: 260px;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .chat-bubble {
@@ -232,20 +322,50 @@ h3 { font-size: 13px; color: #52616b; }
   padding: 10px;
   font-size: 13px;
   line-height: 1.55;
+  white-space: pre-wrap;
 }
 .chat-bubble.assistant { background: #f3f7f6; }
 .chat-bubble.user { background: #176b5c; color: #ffffff; }
 
-.candidate {
-  border: 1px solid #e2e8e6;
-  border-radius: 8px;
-  padding: 10px;
+.chat-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px;
+  gap: 8px;
+  align-items: stretch;
 }
-.candidate span, .candidate p, .muted {
+
+.chat-form textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 72px;
+  max-height: 160px;
+  border: 1px solid #d9e4e1;
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: #1f2933;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.chat-form button {
+  border: 0;
+  border-radius: 8px;
+  background: #176b5c;
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.chat-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.muted {
   color: #667981;
   font-size: 13px;
 }
-.candidate p { margin-top: 6px; line-height: 1.45; }
 
 .insight-row {
   display: grid;

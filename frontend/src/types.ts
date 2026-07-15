@@ -5,6 +5,9 @@ export interface DemandInsight {
   area_code: string;
   area_name: string;
   required_count: number;
+  professional_required_count: number;
+  regular_required_count: number;
+  temporary_required_count: number;
   demand_score: number;
   demand_factors: string[];
   priority: "low" | "medium" | "high";
@@ -64,6 +67,10 @@ export interface ScheduleResponse {
   risks: RiskItem[];
 }
 
+export interface GenerateScheduleOptions {
+  rescheduleFrom?: string;
+}
+
 export interface Candidate {
   employee_id: string;
   employee_name: string;
@@ -79,3 +86,17 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface AgentResponse {
+  message: string;
+  intent: string;
+  is_fallback: boolean;
+  candidates: Candidate[];
+}
+
+export interface EmployeeOption {
+  employee_id: string;
+  employee_name: string;
+  area_code: string;
+  area_name: string;
+  is_protected: number;
+}

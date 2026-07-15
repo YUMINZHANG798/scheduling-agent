@@ -13,6 +13,7 @@ class GenerateScheduleRequest(BaseModel):
     store_id: str
     week_start: str
     instruction: str = ""
+    reschedule_from: str | None = None
 
 
 class DemandResult(BaseModel):
@@ -25,6 +26,9 @@ class DemandResult(BaseModel):
     task_code: str
     task_name: str
     required_count: int
+    professional_required_count: int = 0
+    regular_required_count: int = 0
+    temporary_required_count: int = 0
     demand_score: int
     demand_factors: list[str]
     priority: Literal["low", "medium", "high"]
@@ -39,6 +43,9 @@ class DemandInsight(BaseModel):
     area_code: str
     area_name: str
     required_count: int
+    professional_required_count: int = 0
+    regular_required_count: int = 0
+    temporary_required_count: int = 0
     demand_score: int
     demand_factors: list[str]
     priority: Literal["low", "medium", "high"]
@@ -106,6 +113,12 @@ class ModifyScheduleRequest(BaseModel):
     force: bool = False
 
 
+class LeavePreferenceUpdateRequest(BaseModel):
+    employee_id: str
+    week_start: str
+    preferred_day_off: Literal["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
 class InterventionRecord(BaseModel):
     id: str
     schedule_item_id: str
@@ -128,6 +141,7 @@ class AgentChatRequest(BaseModel):
     version_id: str | None = None
     message: str
     context: dict[str, Any] = Field(default_factory=dict)
+    history: list[dict[str, str]] = Field(default_factory=list)
 
 
 class AgentChatResponse(BaseModel):
@@ -135,6 +149,10 @@ class AgentChatResponse(BaseModel):
     intent: str
     is_fallback: bool = True
     candidates: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ScheduleExplanationRequest(BaseModel):
+    version_id: str
 
 
 class RecommendSupportRequest(BaseModel):
@@ -166,4 +184,3 @@ class HcSuggestion(BaseModel):
 class ConfirmHcSuggestionRequest(BaseModel):
     suggestion_id: str
     status: Literal["confirmed", "rejected"]
-

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.dependencies import get_schedule_service
-from app.models.schemas import GenerateScheduleRequest, ModifyScheduleRequest
+from app.models.schemas import GenerateScheduleRequest, LeavePreferenceUpdateRequest, ModifyScheduleRequest
 from app.services.schedule_service import ScheduleService
 
 router = APIRouter(prefix="/schedule", tags=["schedule"])
@@ -20,6 +20,31 @@ def generate_schedule(
         code = str(exc)
         status = 404 if code == "STORE_NOT_FOUND" else 400
         raise HTTPException(status_code=status, detail={"error_code": code}) from exc
+
+
+@router.get("/leave-options")
+def get_leave_options(service: ScheduleService = Depends(get_schedule_service)):
+    return service.regular_employees()
+
+
+@router.post("/leave-preferences")
+def update_leave_preference(
+    request: LeavePreferenceUpdateRequest,
+    service: ScheduleService = Depends(get_schedule_service),
+):
+    try:
+        return service.upsert_leave_preference(request)
+    except ValueError as exc:
+        code = str(exc)
+        status = 404 if code == "EMPLOYEE_NOT_FOUND" else 409 if code.startswith("LEAVE_REJECTED") else 400
+        if code.startswith("LEAVE_REJECTED:"):
+            raise HTTPException(status_code=status, detail={"error_code": "LEAVE_REJECTED", "message": code.split(":", 1)[1]}) from exc
+        messages = {
+            "EMPLOYEE_NOT_FOUND": "未找到可申请休假的正式工。",
+            "INVALID_WEEK_START": "排班周起始日期必须是周一。",
+            "LEAVE_TOO_LATE": "请假至少需要提前一天，已过去或当天的班表不能修改。",
+        }
+        raise HTTPException(status_code=status, detail={"error_code": code, "message": messages.get(code, code)}) from exc
 
 
 @router.get("/{version_id}")

@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 import { api } from "./api";
-import type { Candidate, ChatMessage, ScheduleItem, ScheduleResponse } from "./types";
+import type { ChatMessage, EmployeeOption, ScheduleItem, ScheduleResponse } from "./types";
 
 const WEEK_START = "2026-07-13";
+const BUSINESS_TODAY = "2026-07-15";
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const AREA_ORDER = ["aquatic", "meat", "produce", "cashier", "replenishment"];
 const AREA_OPTIONS = [
@@ -12,28 +14,67 @@ const AREA_OPTIONS = [
   { code: "cashier", name: "收银/前场" },
   { code: "replenishment", name: "补货区" }
 ];
+const DAY_OPTIONS = [
+  { code: "Monday", name: "周一" },
+  { code: "Tuesday", name: "周二" },
+  { code: "Wednesday", name: "周三" },
+  { code: "Thursday", name: "周四" },
+  { code: "Friday", name: "周五" },
+  { code: "Saturday", name: "周六" },
+  { code: "Sunday", name: "周日" }
+];
 
 function percent(value?: number) {
   return `${Math.round((value ?? 0) * 100)}%`;
 }
 
+type LeaveNotice = {
+  type: "success" | "error";
+  title: string;
+  message: string;
+};
+
 export function App() {
   const [schedule, setSchedule] = useState<ScheduleResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [leaveSubmitting, setLeaveSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "assistant", content: "我可以解释需求、推荐支援候选人，也可以说明专业师傅为什么不能被抽调。" }
+    { role: "assistant", content: "生成下周排班后，我会说明本次排班原因。之后可以在这里继续追问排班相关问题。" }
   ]);
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [agentInput, setAgentInput] = useState("");
+  const [agentThinking, setAgentThinking] = useState(false);
   const [selectedArea, setSelectedArea] = useState(AREA_OPTIONS[0].code);
+  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
+  const [leaveEmployeeId, setLeaveEmployeeId] = useState("");
+  const [leaveDay, setLeaveDay] = useState("Thursday");
+  const [leaveNotice, setLeaveNotice] = useState<LeaveNotice | null>(null);
+  const [rescheduleFrom, setRescheduleFrom] = useState<string | undefined>();
+
+  useEffect(() => {
+    api.leaveOptions()
+      .then((options) => {
+        setEmployees(options);
+        setLeaveEmployeeId((current) => current || options[0]?.employee_id || "");
+      })
+      .catch(() => setLeaveNotice({ type: "error", title: "申请失败", message: "正式工列表加载失败" }));
+  }, []);
+
+  useEffect(() => {
+    if (leaveNotice?.type !== "success") return;
+    const timer = window.setTimeout(() => setLeaveNotice(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [leaveNotice]);
 
   async function generate() {
     setLoading(true);
     setError("");
     try {
-      const response = await api.generateSchedule(WEEK_START);
+      const response = await api.generateSchedule(WEEK_START, { rescheduleFrom });
       setSchedule(response);
-      setMessages([{ role: "assistant", content: response.agent_summary }]);
+      setRescheduleFrom(undefined);
+      setMessages([{ role: "assistant", content: "" }]);
+      await api.streamScheduleExplanation(response.version_id, (delta) => appendAssistantDelta(delta));
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成失败");
     } finally {
@@ -47,8 +88,8 @@ export function App() {
     try {
       await api.resetDemo();
       setSchedule(null);
-      setCandidates([]);
       setMessages([{ role: "assistant", content: "Demo 数据已重置，可以重新生成班表。" }]);
+      setAgentInput("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "重置失败");
     } finally {
@@ -57,17 +98,95 @@ export function App() {
   }
 
   async function askAgent(question: string) {
-    if (!schedule) return;
-    setMessages((items) => [...items, { role: "user", content: question }]);
+    const trimmed = question.trim();
+    if (!trimmed) return;
+    if (!schedule) {
+      setMessages((items) => [...items, { role: "assistant", content: "请先生成下周班表，我才能基于具体班表回答。" }]);
+      return;
+    }
     const friday = schedule.demand_insights.find((item) => item.weekday === "Friday") ?? schedule.demand_insights[0];
-    const response = await api.chat(schedule.version_id, question, {
-      date: friday?.date,
-      slot: friday?.slot ?? "18:00-19:00",
-      area_code: friday?.area_code ?? "produce",
-      task_code: "restock"
+    const userMessage: ChatMessage = { role: "user", content: trimmed };
+    const history = [...messages, userMessage];
+    setMessages([...history, { role: "assistant", content: "" }]);
+    setAgentInput("");
+    setAgentThinking(true);
+    try {
+      await api.streamChat(
+        schedule.version_id,
+        trimmed,
+        (delta) => appendAssistantDelta(delta),
+        {
+          date: friday?.date,
+          slot: friday?.slot ?? "18:00-19:00",
+          area_code: friday?.area_code ?? "produce",
+          task_code: "restock"
+        },
+        history
+      );
+    } catch (err) {
+      replaceLastAssistant(err instanceof Error ? err.message : "Agent 暂时无法回答，请稍后再试。");
+    } finally {
+      setAgentThinking(false);
+    }
+  }
+
+  function submitAgentQuestion(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void askAgent(agentInput);
+  }
+
+  function appendAssistantDelta(delta: string) {
+    setMessages((items) => {
+      const next = [...items];
+      const last = next[next.length - 1];
+      if (!last || last.role !== "assistant") return [...next, { role: "assistant", content: delta }];
+      next[next.length - 1] = { ...last, content: last.content + delta };
+      return next;
     });
-    setMessages((items) => [...items, { role: "assistant", content: response.message }]);
-    setCandidates(response.candidates ?? []);
+  }
+
+  function replaceLastAssistant(content: string) {
+    setMessages((items) => {
+      const next = [...items];
+      const last = next[next.length - 1];
+      if (!last || last.role !== "assistant") return [...next, { role: "assistant", content }];
+      next[next.length - 1] = { ...last, content };
+      return next;
+    });
+  }
+
+  async function submitLeavePreference() {
+    if (!leaveEmployeeId) {
+      setLeaveNotice({ type: "error", title: "申请失败", message: "请选择正式工" });
+      return;
+    }
+    if (!isLeaveDaySelectable(leaveDay)) {
+      setLeaveNotice({ type: "error", title: "申请失败", message: "请假至少需要提前一天，已过去或当天的班表不能修改。" });
+      return;
+    }
+    const currentSchedule = schedule;
+    setLeaveSubmitting(true);
+    try {
+      const response = await api.updateLeavePreference(leaveEmployeeId, WEEK_START, leaveDay);
+      const updatedSchedule = await api.generateSchedule(WEEK_START, { rescheduleFrom: response.effective_date });
+      const dayName = DAY_OPTIONS.find((day) => day.code === response.preferred_day_off)?.name ?? response.preferred_day_off;
+      setSchedule(updatedSchedule);
+      setRescheduleFrom(undefined);
+      setLeaveNotice({
+        type: "success",
+        title: "申请成功",
+        message: `${response.employee_name} 已提交 ${dayName} 休假申请，班表已从休假日开始自动重排。`
+      });
+    } catch (err) {
+      setSchedule(currentSchedule);
+      setLeaveNotice({
+        type: "error",
+        title: "申请失败",
+        message: err instanceof Error ? err.message : "休假申请提交失败"
+      });
+    } finally {
+      setLeaveSubmitting(false);
+    }
   }
 
   const groupedByDay = useMemo(() => {
@@ -121,6 +240,17 @@ export function App() {
         <aside className="panel area-panel">
           <PanelTitle title="区域保底" />
           <AreaRows schedule={schedule} />
+          <LeaveRequestPanel
+            employees={employees}
+            employeeId={leaveEmployeeId}
+            day={leaveDay}
+            notice={leaveNotice}
+            disabled={leaveSubmitting}
+            onEmployeeChange={setLeaveEmployeeId}
+            onDayChange={setLeaveDay}
+            onSubmit={submitLeavePreference}
+            onDismissNotice={() => setLeaveNotice(null)}
+          />
         </aside>
 
         <section className="panel board-panel">
@@ -131,19 +261,30 @@ export function App() {
 
         <aside className="panel agent-panel">
           <PanelTitle title="Agent" />
-          <div className="quick-row">
-            <button onClick={() => askAgent("周五晚高峰果蔬缺人，谁能支援")}>推荐支援</button>
-            <button onClick={() => askAgent("为什么不能把老张调去收银")}>不可调解释</button>
-            <button onClick={() => askAgent("解释周五晚高峰需求")}>需求解释</button>
+          <div className="chat-window">
+            <div className="chat-list">
+              {messages.map((message, index) => (
+                <div key={index} className={`chat-bubble ${message.role}`}>
+                  {message.content}
+                </div>
+              ))}
+              {agentThinking && !messages[messages.length - 1]?.content && (
+                <div className="chat-bubble assistant">正在结合班表、需求预测和人员约束分析...</div>
+              )}
+            </div>
+            <form className="chat-form" onSubmit={submitAgentQuestion}>
+              <textarea
+                value={agentInput}
+                onChange={(event) => setAgentInput(event.target.value)}
+                placeholder={schedule ? "询问排班原因、支援候选、请假影响..." : "先生成下周排班"}
+                disabled={agentThinking}
+                rows={3}
+              />
+              <button type="submit" disabled={agentThinking || !agentInput.trim()}>
+                发送
+              </button>
+            </form>
           </div>
-          <div className="chat-list">
-            {messages.map((message, index) => (
-              <div key={index} className={`chat-bubble ${message.role}`}>
-                {message.content}
-              </div>
-            ))}
-          </div>
-          <CandidateList candidates={candidates} />
         </aside>
       </section>
 
@@ -156,7 +297,9 @@ export function App() {
                 <strong>{item.area_name}</strong>
                 <span>{item.date} {item.slot}</span>
                 <meter min={0} max={100} value={item.demand_score} />
-                <span>{item.demand_factors.slice(0, 2).join(" / ")}</span>
+                <span>
+                  师傅 {item.professional_required_count} · 正式 {item.regular_required_count} · 小时工 {item.temporary_required_count}
+                </span>
               </div>
             ))}
           </div>
@@ -235,6 +378,93 @@ function AreaRows({ schedule }: { schedule: ScheduleResponse | null }) {
   );
 }
 
+function LeaveRequestPanel({
+  employees,
+  employeeId,
+  day,
+  notice,
+  disabled,
+  onEmployeeChange,
+  onDayChange,
+  onSubmit,
+  onDismissNotice
+}: {
+  employees: EmployeeOption[];
+  employeeId: string;
+  day: string;
+  notice: LeaveNotice | null;
+  disabled: boolean;
+  onEmployeeChange: (employeeId: string) => void;
+  onDayChange: (day: string) => void;
+  onSubmit: () => void;
+  onDismissNotice: () => void;
+}) {
+  const groupedEmployees = useMemo(() => {
+    return employees.reduce<Record<string, EmployeeOption[]>>((groups, employee) => {
+      groups[employee.area_name] = groups[employee.area_name] ?? [];
+      groups[employee.area_name].push(employee);
+      return groups;
+    }, {});
+  }, [employees]);
+
+  return (
+    <div className="leave-panel">
+      <h2>周休假申请</h2>
+      <label>
+        <span>正式工</span>
+        <select value={employeeId} onChange={(event) => onEmployeeChange(event.target.value)} disabled={disabled || !employees.length}>
+          {Object.entries(groupedEmployees).map(([areaName, areaEmployees]) => (
+            <optgroup label={areaName} key={areaName}>
+              {areaEmployees.map((employee) => (
+                <option value={employee.employee_id} key={employee.employee_id}>
+                  {employee.employee_name}{employee.is_protected ? " · 专业" : ""}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span>休假日</span>
+        <select value={day} onChange={(event) => onDayChange(event.target.value)} disabled={disabled}>
+          {DAY_OPTIONS.map((item) => (
+            <option value={item.code} key={item.code} disabled={!isLeaveDaySelectable(item.code)}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button type="button" onClick={onSubmit} disabled={disabled || !employeeId}>
+        {disabled ? "提交中" : "提交申请"}
+      </button>
+      {notice && (
+        <div className={`leave-notice ${notice.type}`} role="status">
+          <div>
+            <strong>{notice.title}</strong>
+            <p>{notice.message}</p>
+          </div>
+          {notice.type === "error" && (
+            <button type="button" onClick={onDismissNotice} aria-label="关闭申请失败提示">
+              ×
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function isLeaveDaySelectable(dayCode: string) {
+  return dayOffDate(dayCode) > BUSINESS_TODAY;
+}
+
+function dayOffDate(dayCode: string) {
+  const start = new Date(`${WEEK_START}T00:00:00`);
+  const offset = DAYS.indexOf(dayCode);
+  start.setDate(start.getDate() + offset);
+  return start.toISOString().slice(0, 10);
+}
+
 function EmptyState() {
   return <div className="empty-state">点击生成按钮后，这里会展示 7 天半混班班表。</div>;
 }
@@ -291,21 +521,6 @@ function WeekBoard({ groupedByDay }: { groupedByDay: Map<string, ScheduleItem[]>
             ))}
             {(groupedByDay.get(day) ?? []).length === 0 && <p className="muted">本区域当日无排班</p>}
           </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function CandidateList({ candidates }: { candidates: Candidate[] }) {
-  if (!candidates.length) return <p className="muted">候选人会在 Agent 推荐后出现。</p>;
-  return (
-    <div className="candidate-list">
-      {candidates.map((candidate) => (
-        <div className="candidate" key={candidate.employee_id}>
-          <strong>{candidate.employee_name}</strong>
-          <span>技能 {candidate.skill_level} · {candidate.weekly_hours}/{candidate.weekly_hours_limit}h</span>
-          <p>{candidate.reason}</p>
         </div>
       ))}
     </div>

@@ -159,7 +159,6 @@ class SchedulingGenerator:
         approved: dict[tuple[str, str], set[str]] = defaultdict(set)
         for key, emp_ids in leave_by_day_area.items():
             _, area_code = key
-            baseline_min = int(self.areas[area_code]["baseline_min"])
             capacity = self._daily_leave_capacity(area_code)
             ordered = sorted(emp_ids, key=lambda eid: (self.employees[eid].get("is_protected"), eid))
             for eid in ordered:
@@ -240,13 +239,14 @@ class SchedulingGenerator:
             ]
             if row["is_protected"] and self.tasks[(row["area_code"], row["task_code"])]["is_professional"]:
                 qualified_count = self._qualified_professional_count(row, schedule_items)
-                if qualified_count < row["required_count"]:
+                required_professionals = row.get("professional_required_count", row["required_count"])
+                if qualified_count < required_professionals:
                     risks.append(
                         {
                             "id": f"risk_{len(risks)+1:04d}",
                             "type": "professional_gap",
                             "level": "critical",
-                            "description": f"{row['date']} {row['slot']} {row['area_name']}{row['task_name']}需要{row['required_count']}名合格师傅，当前{qualified_count}名。",
+                            "description": f"{row['date']} {row['slot']} {row['area_name']}{row['task_name']}需要{required_professionals}名合格师傅，当前{qualified_count}名。",
                             "affected_item_ids": [],
                             "suggestion": "优先保留本区域S/A级正式工，不建议跨区抽调。",
                         }
@@ -279,7 +279,7 @@ class SchedulingGenerator:
         ]
         professional_covered = 0
         for row in professional_demand:
-            if self._qualified_professional_count(row, schedule_items) >= row["required_count"]:
+            if self._qualified_professional_count(row, schedule_items) >= row.get("professional_required_count", row["required_count"]):
                 professional_covered += 1
         baseline_checks = 0
         baseline_hits = 0
