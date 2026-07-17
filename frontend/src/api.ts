@@ -1,4 +1,4 @@
-import type { AgentResponse, Candidate, ChatMessage, EmployeeOption, GenerateScheduleOptions, ScheduleResponse } from "./types";
+import type { AgentResponse, Candidate, ChatMessage, EmployeeOption, GenerateScheduleOptions, ScheduleResponse, ScheduleVersionSummary } from "./types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000/api";
 
@@ -43,9 +43,25 @@ async function streamRequest(path: string, body: unknown, onDelta: (delta: strin
       if (!dataLines.length) continue;
       const payload = JSON.parse(dataLines.join("\n")) as { delta?: string; error?: string; done?: boolean };
       if (payload.error) throw new Error(payload.error);
-      if (payload.delta) onDelta(payload.delta);
+      if (payload.delta) {
+        onDelta(payload.delta);
+        await nextPaint();
+      }
     }
   }
+}
+
+function nextPaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
+function toApiHistory(history: ChatMessage[]) {
+  return history.map((item) => ({
+    role: item.role,
+    content: item.content
+  }));
 }
 
 export const api = {
@@ -63,6 +79,13 @@ export const api = {
   leaveOptions() {
     return request<EmployeeOption[]>("/schedule/leave-options");
   },
+  scheduleVersions(weekStart?: string) {
+    const query = weekStart ? `?week_start=${encodeURIComponent(weekStart)}` : "";
+    return request<ScheduleVersionSummary[]>(`/schedule/versions${query}`);
+  },
+  getSchedule(versionId: string) {
+    return request<ScheduleResponse>(`/schedule/${versionId}`);
+  },
   updateLeavePreference(employeeId: string, weekStart: string, preferredDayOff: string) {
     return request<{ message: string; employee_name: string; preferred_day_off: string; effective_date: string }>("/schedule/leave-preferences", {
       method: "POST",
@@ -79,11 +102,11 @@ export const api = {
   chat(versionId: string, message: string, context = {}, history: ChatMessage[] = []) {
     return request<AgentResponse>("/agent/chat", {
       method: "POST",
-      body: JSON.stringify({ version_id: versionId, message, context, history })
+      body: JSON.stringify({ version_id: versionId, message, context, history: toApiHistory(history) })
     });
   },
   streamChat(versionId: string, message: string, onDelta: (delta: string) => void, context = {}, history: ChatMessage[] = []) {
-    return streamRequest("/agent/chat/stream", { version_id: versionId, message, context, history }, onDelta);
+    return streamRequest("/agent/chat/stream", { version_id: versionId, message, context, history: toApiHistory(history) }, onDelta);
   },
   scheduleExplanation(versionId: string) {
     return request<AgentResponse>("/agent/schedule-explanation", {

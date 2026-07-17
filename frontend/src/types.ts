@@ -53,6 +53,19 @@ export interface Kpis {
   intervention_rate: number;
 }
 
+export interface StaffingBucket {
+  total_count: number;
+  scheduled_count: number;
+  unscheduled_count: number;
+  leave_count: number;
+}
+
+export interface StaffingSummary {
+  total: StaffingBucket;
+  regular: StaffingBucket;
+  temporary: StaffingBucket;
+}
+
 export interface ScheduleResponse {
   version_id: string;
   store_id: string;
@@ -64,7 +77,20 @@ export interface ScheduleResponse {
   demand_insights: DemandInsight[];
   schedule_items: ScheduleItem[];
   kpis: Kpis;
+  staffing_summary: StaffingSummary;
   risks: RiskItem[];
+}
+
+export interface ScheduleVersionSummary {
+  id: string;
+  store_id: string;
+  store_name: string;
+  week_start: string;
+  generated_at: string;
+  agent_summary: string;
+  schedule_item_count: number;
+  intervention_count: number;
+  is_latest: boolean;
 }
 
 export interface GenerateScheduleOptions {
@@ -84,6 +110,13 @@ export interface Candidate {
 export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  sections?: AgentSection[];
+  suggested_questions?: string[];
+}
+
+export interface AgentSection {
+  title: string;
+  bullets: string[];
 }
 
 export interface AgentResponse {
@@ -91,6 +124,8 @@ export interface AgentResponse {
   intent: string;
   is_fallback: boolean;
   candidates: Candidate[];
+  sections: AgentSection[];
+  suggested_questions: string[];
 }
 
 export interface EmployeeOption {

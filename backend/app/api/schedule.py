@@ -27,6 +27,15 @@ def get_leave_options(service: ScheduleService = Depends(get_schedule_service)):
     return service.regular_employees()
 
 
+@router.get("/versions")
+def get_schedule_versions(
+    store_id: str | None = Query(default=None),
+    week_start: str | None = Query(default=None),
+    service: ScheduleService = Depends(get_schedule_service),
+):
+    return service.versions(store_id, week_start)
+
+
 @router.post("/leave-preferences")
 def update_leave_preference(
     request: LeavePreferenceUpdateRequest,

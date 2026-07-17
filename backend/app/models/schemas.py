@@ -82,6 +82,19 @@ class KpiResult(BaseModel):
     intervention_rate: float
 
 
+class StaffingBucket(BaseModel):
+    total_count: int
+    scheduled_count: int
+    unscheduled_count: int
+    leave_count: int
+
+
+class StaffingSummary(BaseModel):
+    total: StaffingBucket
+    regular: StaffingBucket
+    temporary: StaffingBucket
+
+
 class RiskItem(BaseModel):
     id: str
     type: str
@@ -103,6 +116,7 @@ class ScheduleResponse(BaseModel):
     demand_results: list[DemandResult]
     schedule_items: list[ScheduleItem]
     kpis: KpiResult
+    staffing_summary: StaffingSummary
     risks: list[RiskItem]
 
 
@@ -144,11 +158,18 @@ class AgentChatRequest(BaseModel):
     history: list[dict[str, str]] = Field(default_factory=list)
 
 
+class AgentSection(BaseModel):
+    title: str
+    bullets: list[str] = Field(default_factory=list)
+
+
 class AgentChatResponse(BaseModel):
     message: str
     intent: str
     is_fallback: bool = True
     candidates: list[dict[str, Any]] = Field(default_factory=list)
+    sections: list[AgentSection] = Field(default_factory=list)
+    suggested_questions: list[str] = Field(default_factory=list)
 
 
 class ScheduleExplanationRequest(BaseModel):

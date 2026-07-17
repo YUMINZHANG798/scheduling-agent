@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { api } from "./api";
-import type { ChatMessage, EmployeeOption, ScheduleItem, ScheduleResponse } from "./types";
+import type { ChatMessage, EmployeeOption, ScheduleItem, ScheduleResponse, ScheduleVersionSummary } from "./types";
 
 const WEEK_START = "2026-07-13";
 const BUSINESS_TODAY = "2026-07-15";
@@ -24,10 +24,6 @@ const DAY_OPTIONS = [
   { code: "Sunday", name: "周日" }
 ];
 
-function percent(value?: number) {
-  return `${Math.round((value ?? 0) * 100)}%`;
-}
-
 type LeaveNotice = {
   type: "success" | "error";
   title: string;
@@ -40,12 +36,20 @@ export function App() {
   const [leaveSubmitting, setLeaveSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "assistant", content: "生成下周排班后，我会说明本次排班原因。之后可以在这里继续追问排班相关问题。" }
+    {
+      role: "assistant",
+      content: "生成下周排班后，我会从业务视角解释为什么这样排，并支持你继续追问需求、风险和候选人。"
+    }
   ]);
   const [agentInput, setAgentInput] = useState("");
   const [agentThinking, setAgentThinking] = useState(false);
   const [selectedArea, setSelectedArea] = useState(AREA_OPTIONS[0].code);
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
+  const [versions, setVersions] = useState<ScheduleVersionSummary[]>([]);
+  const [currentVersion, setCurrentVersion] = useState<ScheduleResponse | null>(null);
+  const currentVersionRef = useRef<ScheduleResponse | null>(null);
+  const [hasCurrentSessionSchedule, setHasCurrentSessionSchedule] = useState(false);
+  const [viewingHistory, setViewingHistory] = useState(false);
   const [leaveEmployeeId, setLeaveEmployeeId] = useState("");
   const [leaveDay, setLeaveDay] = useState("Thursday");
   const [leaveNotice, setLeaveNotice] = useState<LeaveNotice | null>(null);
@@ -57,7 +61,13 @@ export function App() {
         setEmployees(options);
         setLeaveEmployeeId((current) => current || options[0]?.employee_id || "");
       })
-      .catch(() => setLeaveNotice({ type: "error", title: "申请失败", message: "正式工列表加载失败" }));
+      .catch(() => {
+        setLeaveNotice({ type: "error", title: "加载失败", message: "正式工列表加载失败。" });
+      });
+  }, []);
+
+  useEffect(() => {
+    void refreshVersions();
   }, []);
 
   useEffect(() => {
@@ -67,16 +77,116 @@ export function App() {
   }, [leaveNotice]);
 
   async function generate() {
+    if (viewingHistory) {
+      await returnToCurrentSchedule();
+      return;
+    }
     setLoading(true);
     setError("");
     try {
       const response = await api.generateSchedule(WEEK_START, { rescheduleFrom });
       setSchedule(response);
+      setCurrentVersion(response);
+      currentVersionRef.current = response;
+      setHasCurrentSessionSchedule(true);
+      setViewingHistory(false);
       setRescheduleFrom(undefined);
-      setMessages([{ role: "assistant", content: "" }]);
-      await api.streamScheduleExplanation(response.version_id, (delta) => appendAssistantDelta(delta));
+      void refreshVersions();
+      setLoading(false);
+      setAgentThinking(true);
+      let streamed = "";
+      let hasStreamMessage = false;
+      try {
+        await api.streamScheduleExplanation(response.version_id, (delta) => {
+          streamed += delta;
+          if (!hasStreamMessage) {
+            hasStreamMessage = true;
+            setMessages([{ role: "assistant", content: streamed }]);
+            return;
+          }
+          setMessages((items) => {
+            const next = [...items];
+            const lastIndex = next.length - 1;
+            if (lastIndex >= 0 && next[lastIndex].role === "assistant") {
+              next[lastIndex] = { ...next[lastIndex], content: streamed };
+              return next;
+            }
+            return [...next, { role: "assistant", content: streamed }];
+          });
+        });
+      } catch (streamErr) {
+        if (streamed) {
+          setMessages([{ role: "assistant", content: streamed }]);
+          return;
+        }
+        const explanation = await api.scheduleExplanation(response.version_id);
+        setMessages([
+          {
+            role: "assistant",
+            content: explanation.message,
+            sections: explanation.sections,
+            suggested_questions: explanation.suggested_questions
+          }
+        ]);
+      } finally {
+        setAgentThinking(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "生成失败");
+      setLoading(false);
+    }
+  }
+
+  async function refreshVersions() {
+    try {
+      const rows = await api.scheduleVersions();
+      setVersions(rows);
+    } catch {
+      setVersions([]);
+    }
+  }
+
+  async function returnToCurrentSchedule() {
+    setLoading(true);
+    setError("");
+    try {
+      const current = currentVersionRef.current;
+      if (!hasCurrentSessionSchedule || !current) {
+        setSchedule(null);
+        setCurrentVersion(null);
+        setViewingHistory(false);
+        setAgentThinking(false);
+        setMessages([{ role: "assistant", content: "当前还没有生成本周排班表，请点击生成下周排班。" }]);
+        return;
+      }
+      setSchedule(current);
+      setCurrentVersion(current);
+      setViewingHistory(false);
+      setAgentThinking(false);
+      setMessages([{ role: "assistant", content: "已回到本周最新排班表。" }]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "回到本周排班失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function openVersion(versionId: string) {
+    if (schedule?.version_id === versionId) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await api.getSchedule(versionId);
+      if (!viewingHistory && schedule?.week_start === WEEK_START) {
+        setCurrentVersion(schedule);
+        currentVersionRef.current = schedule;
+      }
+      setSchedule(response);
+      setViewingHistory(currentVersionRef.current?.version_id !== versionId);
+      setAgentThinking(false);
+      setMessages([{ role: "assistant", content: "已打开历史排班记录。历史查询只展示班表，不调用大模型解释。" }]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加载历史排班失败");
     } finally {
       setLoading(false);
     }
@@ -88,8 +198,13 @@ export function App() {
     try {
       await api.resetDemo();
       setSchedule(null);
+      setCurrentVersion(null);
+      currentVersionRef.current = null;
+      setHasCurrentSessionSchedule(false);
+      setViewingHistory(false);
       setMessages([{ role: "assistant", content: "Demo 数据已重置，可以重新生成班表。" }]);
       setAgentInput("");
+      void refreshVersions();
     } catch (err) {
       setError(err instanceof Error ? err.message : "重置失败");
     } finally {
@@ -101,20 +216,27 @@ export function App() {
     const trimmed = question.trim();
     if (!trimmed) return;
     if (!schedule) {
-      setMessages((items) => [...items, { role: "assistant", content: "请先生成下周班表，我才能基于具体班表回答。" }]);
+      setMessages((items) => [...items, { role: "assistant", content: "请先生成下周班表，我才能基于实际排班做解释。" }]);
       return;
     }
+    if (viewingHistory) {
+      setMessages((items) => [
+        ...items,
+        { role: "assistant", content: "当前是历史排班查看模式，不调用大模型。请回到本周排班表后再询问 Agent。" }
+      ]);
+      return;
+    }
+
     const friday = schedule.demand_insights.find((item) => item.weekday === "Friday") ?? schedule.demand_insights[0];
     const userMessage: ChatMessage = { role: "user", content: trimmed };
     const history = [...messages, userMessage];
-    setMessages([...history, { role: "assistant", content: "" }]);
+    setMessages(history);
     setAgentInput("");
     setAgentThinking(true);
     try {
-      await api.streamChat(
+      const response = await api.chat(
         schedule.version_id,
         trimmed,
-        (delta) => appendAssistantDelta(delta),
         {
           date: friday?.date,
           slot: friday?.slot ?? "18:00-19:00",
@@ -123,8 +245,20 @@ export function App() {
         },
         history
       );
+      setMessages((items) => [
+        ...items,
+        {
+          role: "assistant",
+          content: response.message,
+          sections: response.sections,
+          suggested_questions: response.suggested_questions
+        }
+      ]);
     } catch (err) {
-      replaceLastAssistant(err instanceof Error ? err.message : "Agent 暂时无法回答，请稍后再试。");
+      setMessages((items) => [
+        ...items,
+        { role: "assistant", content: err instanceof Error ? err.message : "Agent 暂时无法回答，请稍后再试。" }
+      ]);
     } finally {
       setAgentThinking(false);
     }
@@ -135,33 +269,13 @@ export function App() {
     void askAgent(agentInput);
   }
 
-  function appendAssistantDelta(delta: string) {
-    setMessages((items) => {
-      const next = [...items];
-      const last = next[next.length - 1];
-      if (!last || last.role !== "assistant") return [...next, { role: "assistant", content: delta }];
-      next[next.length - 1] = { ...last, content: last.content + delta };
-      return next;
-    });
-  }
-
-  function replaceLastAssistant(content: string) {
-    setMessages((items) => {
-      const next = [...items];
-      const last = next[next.length - 1];
-      if (!last || last.role !== "assistant") return [...next, { role: "assistant", content }];
-      next[next.length - 1] = { ...last, content };
-      return next;
-    });
-  }
-
   async function submitLeavePreference() {
     if (!leaveEmployeeId) {
-      setLeaveNotice({ type: "error", title: "申请失败", message: "请选择正式工" });
+      setLeaveNotice({ type: "error", title: "提交失败", message: "请选择正式工。" });
       return;
     }
     if (!isLeaveDaySelectable(leaveDay)) {
-      setLeaveNotice({ type: "error", title: "申请失败", message: "请假至少需要提前一天，已过去或当天的班表不能修改。" });
+      setLeaveNotice({ type: "error", title: "提交失败", message: "请假至少需要提前一天提交。" });
       return;
     }
     const currentSchedule = schedule;
@@ -171,7 +285,12 @@ export function App() {
       const updatedSchedule = await api.generateSchedule(WEEK_START, { rescheduleFrom: response.effective_date });
       const dayName = DAY_OPTIONS.find((day) => day.code === response.preferred_day_off)?.name ?? response.preferred_day_off;
       setSchedule(updatedSchedule);
+      setCurrentVersion(updatedSchedule);
+      currentVersionRef.current = updatedSchedule;
+      setHasCurrentSessionSchedule(true);
+      setViewingHistory(false);
       setRescheduleFrom(undefined);
+      void refreshVersions();
       setLeaveNotice({
         type: "success",
         title: "申请成功",
@@ -182,7 +301,7 @@ export function App() {
       setLeaveNotice({
         type: "error",
         title: "申请失败",
-        message: err instanceof Error ? err.message : "休假申请提交失败"
+        message: err instanceof Error ? err.message : "休假申请提交失败。"
       });
     } finally {
       setLeaveSubmitting(false);
@@ -219,25 +338,20 @@ export function App() {
         </div>
         <div className="toolbar">
           <span className="week-pill">2026-07-13 至 2026-07-19</span>
-          <button className="icon-button secondary" onClick={reset} disabled={loading} title="重置 Demo">↺</button>
+          <button className="icon-button secondary" onClick={reset} disabled={loading} title="重置 Demo">↻</button>
           <button className="primary-button" onClick={generate} disabled={loading}>
-            {loading ? "生成中" : "生成下周半混班班表"}
+            {loading ? "处理中..." : viewingHistory ? "回到本周排班表" : "生成下周排班"}
           </button>
         </div>
       </header>
 
       {error && <div className="error-strip">{error}</div>}
 
-      <section className="summary-band">
-        <Kpi label="专业岗覆盖" value={percent(schedule?.kpis.professional_coverage_rate)} tone="green" />
-        <Kpi label="区域保底达成" value={percent(schedule?.kpis.baseline_achievement_rate)} tone="blue" />
-        <Kpi label="混排池利用" value={percent(schedule?.kpis.mixed_utilization_rate)} tone="teal" />
-        <Kpi label="人工干预率" value={percent(schedule?.kpis.intervention_rate)} tone="gray" />
-        <Kpi label="高峰缺口" value={String(schedule?.kpis.peak_gap_count ?? 0)} tone="amber" />
-      </section>
+      <StaffingSummaryPanel schedule={schedule} />
 
       <section className="workbench-grid">
         <aside className="panel area-panel">
+          <HistoryPanel versions={versions} activeVersionId={schedule?.version_id} onOpen={openVersion} />
           <PanelTitle title="区域保底" />
           <AreaRows schedule={schedule} />
           <LeaveRequestPanel
@@ -265,18 +379,43 @@ export function App() {
             <div className="chat-list">
               {messages.map((message, index) => (
                 <div key={index} className={`chat-bubble ${message.role}`}>
-                  {message.content}
+                  <p>{message.content}</p>
+                  {message.role === "assistant" && !!message.sections?.length && (
+                    <div className="chat-sections">
+                      {message.sections.map((section) => (
+                        <section className="chat-section" key={`${index}-${section.title}`}>
+                          <strong>{section.title}</strong>
+                          <ul>
+                            {section.bullets.map((bullet) => (
+                              <li key={bullet}>{bullet}</li>
+                            ))}
+                          </ul>
+                        </section>
+                      ))}
+                    </div>
+                  )}
+                  {message.role === "assistant" && !!message.suggested_questions?.length && (
+                    <div className="chat-suggestions">
+                      {message.suggested_questions.map((item) => (
+                        <button key={item} type="button" onClick={() => void askAgent(item)} disabled={agentThinking}>
+                          {item}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
-              {agentThinking && !messages[messages.length - 1]?.content && (
-                <div className="chat-bubble assistant">正在结合班表、需求预测和人员约束分析...</div>
+              {agentThinking && (
+                <div className="chat-bubble assistant">
+                  <p>正在结合班表、需求预测和人员约束生成解释...</p>
+                </div>
               )}
             </div>
             <form className="chat-form" onSubmit={submitAgentQuestion}>
               <textarea
                 value={agentInput}
                 onChange={(event) => setAgentInput(event.target.value)}
-                placeholder={schedule ? "询问排班原因、支援候选、请假影响..." : "先生成下周排班"}
+                placeholder={schedule ? "询问排班原因、风险、补位候选和需求变化..." : "先生成下周排班"}
                 disabled={agentThinking}
                 rows={3}
               />
@@ -287,38 +426,119 @@ export function App() {
           </div>
         </aside>
       </section>
-
-      <section className="bottom-grid">
-        <div className="panel">
-          <PanelTitle title="需求洞察" />
-          <div className="insight-list">
-            {(schedule?.demand_insights ?? []).slice(0, 8).map((item) => (
-              <div key={`${item.date}-${item.slot}-${item.area_code}`} className="insight-row">
-                <strong>{item.area_name}</strong>
-                <span>{item.date} {item.slot}</span>
-                <meter min={0} max={100} value={item.demand_score} />
-                <span>
-                  师傅 {item.professional_required_count} · 正式 {item.regular_required_count} · 小时工 {item.temporary_required_count}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="panel">
-          <PanelTitle title="风险与缺口" />
-          <div className="risk-list">
-            {(schedule?.risks ?? []).slice(0, 8).map((risk) => (
-              <div className="risk-row" key={risk.id}>
-                <span className={`risk-dot ${risk.level}`} />
-                <p>{risk.description}</p>
-              </div>
-            ))}
-            {!schedule && <p className="muted">生成班表后展示风险。</p>}
-          </div>
-        </div>
-      </section>
     </main>
   );
+}
+
+function StaffingSummaryPanel({ schedule }: { schedule: ScheduleResponse | null }) {
+  const summary = schedule?.staffing_summary;
+  const groups = [
+    { title: "总员工", data: summary?.total },
+    { title: "正式工", data: summary?.regular },
+    { title: "小时工", data: summary?.temporary }
+  ];
+
+  return (
+    <section className="staffing-summary" aria-label="人员数量总览">
+      {groups.map((group) => (
+        <div className="staffing-card" key={group.title}>
+          <strong>{group.title}</strong>
+          <div className="staffing-main">
+            <span>总数</span>
+            <b>{group.data?.total_count ?? 0}</b>
+          </div>
+          <dl>
+            <div>
+              <dt>本周被排班</dt>
+              <dd>{group.data?.scheduled_count ?? 0}</dd>
+            </div>
+            <div>
+              <dt>未被安排</dt>
+              <dd>{group.data?.unscheduled_count ?? 0}</dd>
+            </div>
+            <div>
+              <dt>请假人数</dt>
+              <dd>{group.data?.leave_count ?? 0}</dd>
+            </div>
+          </dl>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function HistoryPanel({
+  versions,
+  activeVersionId,
+  onOpen
+}: {
+  versions: ScheduleVersionSummary[];
+  activeVersionId?: string;
+  onOpen: (versionId: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [weekFilter, setWeekFilter] = useState("");
+  const weekOptions = useMemo(() => {
+    return Array.from(new Set(versions.map((version) => version.week_start))).sort().reverse();
+  }, [versions]);
+  const filteredVersions = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    return versions.filter((version) => {
+      if (weekFilter && version.week_start !== weekFilter) return false;
+      if (!keyword) return true;
+      return [
+        version.id,
+        version.week_start,
+        version.generated_at,
+        version.store_name
+      ].some((value) => value.toLowerCase().includes(keyword));
+    });
+  }, [query, versions, weekFilter]);
+
+  return (
+    <div className="history-panel">
+      <PanelTitle title="历史排班" />
+      <div className="history-filters">
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="搜索日期 / 版本号"
+        />
+        <select value={weekFilter} onChange={(event) => setWeekFilter(event.target.value)}>
+          <option value="">全部周</option>
+          {weekOptions.map((week) => (
+            <option value={week} key={week}>{week}</option>
+          ))}
+        </select>
+      </div>
+      <div className="history-list">
+        {filteredVersions.slice(0, 20).map((version) => (
+          <button
+            type="button"
+            key={version.id}
+            className={activeVersionId === version.id ? "active" : ""}
+            onClick={() => void onOpen(version.id)}
+          >
+            <strong>{formatDateTime(version.generated_at)}</strong>
+            <span>{version.week_start} · {version.schedule_item_count} 条</span>
+          </button>
+        ))}
+        {!versions.length && <p className="muted">生成排班后会保存历史版本。</p>}
+        {!!versions.length && !filteredVersions.length && <p className="muted">没有匹配的历史排班。</p>}
+      </div>
+    </div>
+  );
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
 }
 
 function slotStartMinutes(slot: string) {
@@ -328,15 +548,6 @@ function slotStartMinutes(slot: string) {
 
 function employeeTypeOrder(type: ScheduleItem["employee_type"]) {
   return type === "regular" ? 0 : 1;
-}
-
-function Kpi({ label, value, tone }: { label: string; value: string; tone: string }) {
-  return (
-    <div className={`kpi ${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
 }
 
 function PanelTitle({ title, action }: { title: string; action?: string }) {
@@ -362,7 +573,7 @@ function AreaRows({ schedule }: { schedule: ScheduleResponse | null }) {
     return AREA_ORDER.map((code) => byArea.get(code)).filter(Boolean) as { area: string; regular: number; temp: number; protected: number }[];
   }, [schedule]);
 
-  if (!schedule) return <p className="muted">生成后显示各区域正式工、临时工与专业保护覆盖。</p>;
+  if (!schedule) return <p className="muted">生成后显示各区域正式工、临时工与专业岗保护覆盖。</p>;
 
   return (
     <div className="area-list">
@@ -370,8 +581,8 @@ function AreaRows({ schedule }: { schedule: ScheduleResponse | null }) {
         <div className="area-row" key={row.area}>
           <strong>{row.area}</strong>
           <span>正式工 {row.regular}</span>
-          <span>临时 {row.temp}</span>
-          <span>保护 {row.protected}</span>
+          <span>临时工 {row.temp}</span>
+          <span>保护岗 {row.protected}</span>
         </div>
       ))}
     </div>
@@ -417,7 +628,7 @@ function LeaveRequestPanel({
             <optgroup label={areaName} key={areaName}>
               {areaEmployees.map((employee) => (
                 <option value={employee.employee_id} key={employee.employee_id}>
-                  {employee.employee_name}{employee.is_protected ? " · 专业" : ""}
+                  {employee.employee_name}{employee.is_protected ? " · 专业岗" : ""}
                 </option>
               ))}
             </optgroup>
@@ -435,7 +646,7 @@ function LeaveRequestPanel({
         </select>
       </label>
       <button type="button" onClick={onSubmit} disabled={disabled || !employeeId}>
-        {disabled ? "提交中" : "提交申请"}
+        {disabled ? "提交中..." : "提交申请"}
       </button>
       {notice && (
         <div className={`leave-notice ${notice.type}`} role="status">
@@ -444,7 +655,7 @@ function LeaveRequestPanel({
             <p>{notice.message}</p>
           </div>
           {notice.type === "error" && (
-            <button type="button" onClick={onDismissNotice} aria-label="关闭申请失败提示">
+            <button type="button" onClick={onDismissNotice} aria-label="关闭提示">
               ×
             </button>
           )}
@@ -466,7 +677,7 @@ function dayOffDate(dayCode: string) {
 }
 
 function EmptyState() {
-  return <div className="empty-state">点击生成按钮后，这里会展示 7 天半混班班表。</div>;
+  return <div className="empty-state">点击生成按钮后，这里会展示 7 天混排班表。</div>;
 }
 
 function AreaSwitcher({

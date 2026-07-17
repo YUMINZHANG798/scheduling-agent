@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS schedule_versions (
   week_start TEXT NOT NULL,
   generated_at TEXT NOT NULL,
   agent_summary TEXT NOT NULL,
-  agent_fallback INTEGER NOT NULL
+  agent_fallback INTEGER NOT NULL,
+  staffing_summary_payload TEXT
 );
 CREATE TABLE IF NOT EXISTS demand_results (
   id TEXT PRIMARY KEY,
@@ -150,19 +151,21 @@ class SQLiteStore:
     def initialize(self) -> None:
         with self.connect() as conn:
             conn.executescript(DDL)
+            self._migrate(conn)
             count = conn.execute("SELECT COUNT(*) FROM areas").fetchone()[0]
             if count == 0:
                 self.load_static_seed(conn)
 
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(schedule_versions)").fetchall()}
+        if "staffing_summary_payload" not in columns:
+            conn.execute("ALTER TABLE schedule_versions ADD COLUMN staffing_summary_payload TEXT")
+
     def reset(self) -> None:
         with self.connect() as conn:
             for table in [
-                "demand_results",
-                "schedule_items",
-                "risk_items",
                 "intervention_records",
                 "agent_messages",
-                "schedule_versions",
                 "hc_suggestions",
                 "areas",
                 "area_tasks",
@@ -205,7 +208,11 @@ class SQLiteStore:
     def save_version(self, payload: dict[str, Any]) -> None:
         with self.connect() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO schedule_versions VALUES (?, ?, ?, ?, ?, ?)",
+                """
+                INSERT OR REPLACE INTO schedule_versions
+                (id, store_id, week_start, generated_at, agent_summary, agent_fallback, staffing_summary_payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
                 (
                     payload["version_id"],
                     payload["store_id"],
@@ -213,22 +220,23 @@ class SQLiteStore:
                     payload["generated_at"],
                     payload["agent_summary"],
                     int(payload["agent_fallback"]),
+                    json.dumps(payload.get("staffing_summary"), ensure_ascii=False),
                 ),
             )
             for row in payload["demand_results"]:
                 conn.execute(
                     "INSERT OR REPLACE INTO demand_results VALUES (?, ?, ?)",
-                    (row["id"], payload["version_id"], json.dumps(row, ensure_ascii=False)),
+                    (f"{payload['version_id']}:{row['id']}", payload["version_id"], json.dumps(row, ensure_ascii=False)),
                 )
             for row in payload["schedule_items"]:
                 conn.execute(
                     "INSERT OR REPLACE INTO schedule_items VALUES (?, ?, ?)",
-                    (row["id"], payload["version_id"], json.dumps(row, ensure_ascii=False)),
+                    (f"{payload['version_id']}:{row['id']}", payload["version_id"], json.dumps(row, ensure_ascii=False)),
                 )
             for row in payload["risks"]:
                 conn.execute(
                     "INSERT OR REPLACE INTO risk_items VALUES (?, ?, ?)",
-                    (row["id"], payload["version_id"], json.dumps(row, ensure_ascii=False)),
+                    (f"{payload['version_id']}:{row['id']}", payload["version_id"], json.dumps(row, ensure_ascii=False)),
                 )
 
     def get_version(self, version_id: str) -> dict[str, Any] | None:
@@ -258,11 +266,19 @@ class SQLiteStore:
             "generated_at": version["generated_at"],
             "agent_summary": version["agent_summary"],
             "agent_fallback": bool(version["agent_fallback"]),
+            "staffing_summary": json.loads(version["staffing_summary_payload"]) if version["staffing_summary_payload"] else None,
             "demand_results": demand,
             "schedule_items": items,
             "risks": risks,
             "intervention_count": interventions,
         }
+
+    def update_version_staffing_summary(self, version_id: str, staffing_summary: dict[str, Any]) -> None:
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE schedule_versions SET staffing_summary_payload = ? WHERE id = ?",
+                (json.dumps(staffing_summary, ensure_ascii=False), version_id),
+            )
 
     def get_latest_version(self, store_id: str, week_start: str) -> dict[str, Any] | None:
         with self.connect() as conn:
@@ -270,7 +286,7 @@ class SQLiteStore:
                 """
                 SELECT id FROM schedule_versions
                 WHERE store_id = ? AND week_start = ?
-                ORDER BY generated_at DESC
+                ORDER BY generated_at DESC, rowid DESC
                 LIMIT 1
                 """,
                 (store_id, week_start),
@@ -278,6 +294,37 @@ class SQLiteStore:
         if not row:
             return None
         return self.get_version(row["id"])
+
+    def list_versions(self, store_id: str | None = None, week_start: str | None = None) -> list[dict[str, Any]]:
+        sql = """
+            SELECT
+              v.id,
+              v.store_id,
+              v.week_start,
+              v.generated_at,
+              v.agent_summary,
+              COUNT(DISTINCT s.id) AS schedule_item_count,
+              COUNT(DISTINCT i.id) AS intervention_count
+            FROM schedule_versions v
+            LEFT JOIN schedule_items s ON s.version_id = v.id
+            LEFT JOIN intervention_records i ON i.version_id = v.id
+        """
+        conditions: list[str] = []
+        params: list[Any] = []
+        if store_id:
+            conditions.append("v.store_id = ?")
+            params.append(store_id)
+        if week_start:
+            conditions.append("v.week_start = ?")
+            params.append(week_start)
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += """
+            GROUP BY v.id, v.store_id, v.week_start, v.generated_at, v.agent_summary
+            ORDER BY v.generated_at DESC, v.rowid DESC
+        """
+        with self.connect() as conn:
+            return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
     def update_schedule_item(self, version_id: str, item_id: str, item: dict[str, Any]) -> None:
         with self.connect() as conn:

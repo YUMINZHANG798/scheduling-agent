@@ -36,6 +36,7 @@ class ScheduleService:
         payload = self.generator.generate(request.week_start, demand_results)
         payload = self._merge_frozen_schedule(request, payload)
         payload["demand_insights"] = insights
+        payload["staffing_summary"] = self._staffing_summary(payload["week_start"], payload["schedule_items"])
         self.store.save_version(payload)
         return ScheduleResponse(**payload)
 
@@ -84,8 +85,21 @@ class ScheduleService:
             demand_results=version["demand_results"],
             schedule_items=version["schedule_items"],
             kpis=kpis,
+            staffing_summary=version.get("staffing_summary") or self._staffing_summary(version["week_start"], version["schedule_items"]),
             risks=version["risks"],
         )
+
+    def versions(self, store_id: str | None = None, week_start: str | None = None) -> list[dict[str, Any]]:
+        return [
+            {
+                **row,
+                "store_name": self.settings.store_name,
+                "is_latest": index == 0,
+            }
+            for index, row in enumerate(
+                row for row in self.store.list_versions(store_id, week_start) if row["schedule_item_count"] > 0
+            )
+        ]
 
     def modify(self, version_id: str, item_id: str, request: ModifyScheduleRequest) -> ModifyScheduleResponse | None:
         version = self.store.get_version(version_id)
@@ -425,6 +439,47 @@ class ScheduleService:
             f"{payload['agent_summary']} 已冻结{freeze_before.isoformat()}之前的既有排班，仅重排可调整日期。"
         )
         return payload
+
+    def _staffing_summary(self, week_start: str, schedule_items: list[dict[str, Any]]) -> dict[str, Any]:
+        active_employees = {
+            employee_id: employee
+            for employee_id, employee in self.generator.employees.items()
+            if employee.get("is_active")
+        }
+        scheduled_ids = {
+            item["employee_id"]
+            for item in schedule_items
+            if item.get("employee_id") in active_employees
+        }
+        submitted_leave_ids = {
+            row["employee_id"]
+            for row in self.generator.seed["employee_weekly_leave"]
+            if row["week_start"] == week_start
+            and row["employee_id"] in active_employees
+            and row.get("created_at") != "2026-07-10T08:00:00Z"
+        }
+        leave_ids = submitted_leave_ids - scheduled_ids
+
+        def bucket(employee_type: str | None = None) -> dict[str, int]:
+            scoped_ids = {
+                employee_id
+                for employee_id, employee in active_employees.items()
+                if employee_type is None or employee["employee_type"] == employee_type
+            }
+            scheduled_scoped = scheduled_ids & scoped_ids
+            leave_scoped = leave_ids & scoped_ids
+            return {
+                "total_count": len(scoped_ids),
+                "scheduled_count": len(scheduled_scoped),
+                "unscheduled_count": len(scoped_ids) - len(scheduled_scoped) - len(leave_scoped),
+                "leave_count": len(leave_scoped),
+            }
+
+        return {
+            "total": bucket(),
+            "regular": bucket("regular"),
+            "temporary": bucket("temporary"),
+        }
 
     def _freeze_before_date(self, request: GenerateScheduleRequest, has_previous: bool) -> date | None:
         start = datetime.strptime(request.week_start, "%Y-%m-%d").date()

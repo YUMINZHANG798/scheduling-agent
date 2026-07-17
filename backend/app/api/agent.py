@@ -12,6 +12,11 @@ from app.models.schemas import AgentChatRequest, ExplainDemandRequest, Recommend
 from app.services.agent_service import AgentService
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 
 
 @router.post("/chat")
@@ -27,6 +32,7 @@ def chat_stream(request: AgentChatRequest, service: AgentService = Depends(get_a
     return StreamingResponse(
         _sse(service.stream_chat(request.message, request.version_id, request.context, request.history)),
         media_type="text/event-stream",
+        headers=SSE_HEADERS,
     )
 
 
@@ -53,7 +59,7 @@ def schedule_explanation_stream(request: ScheduleExplanationRequest, service: Ag
         if code == "SCHEDULE_VERSION_INCOMPLETE":
             raise HTTPException(status_code=409, detail={"error_code": code, "message": "这版班表缺少需求或排班明细，请重新生成下周排班。"}) from exc
         raise
-    return StreamingResponse(_sse(stream), media_type="text/event-stream")
+    return StreamingResponse(_sse(stream), media_type="text/event-stream", headers=SSE_HEADERS)
 
 
 @router.post("/recommend-support")
