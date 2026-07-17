@@ -4,7 +4,7 @@
     "name": "水产区",
     "allow_mixed": true,
     "baseline_min": 2,
-    "baseline_max": 3,
+    "baseline_max": 4,
     "sort_order": 1
   },
   {
@@ -12,31 +12,31 @@
     "name": "肉类区",
     "allow_mixed": true,
     "baseline_min": 2,
-    "baseline_max": 3,
+    "baseline_max": 4,
     "sort_order": 2
   },
   {
     "code": "produce",
     "name": "果蔬区",
     "allow_mixed": true,
-    "baseline_min": 1,
-    "baseline_max": 2,
+    "baseline_min": 3,
+    "baseline_max": 5,
     "sort_order": 3
   },
   {
     "code": "cashier",
     "name": "收银/前场",
     "allow_mixed": true,
-    "baseline_min": 1,
-    "baseline_max": 2,
+    "baseline_min": 3,
+    "baseline_max": 6,
     "sort_order": 4
   },
   {
     "code": "replenishment",
     "name": "补货区",
     "allow_mixed": true,
-    "baseline_min": 1,
-    "baseline_max": 2,
+    "baseline_min": 2,
+    "baseline_max": 4,
     "sort_order": 5
   }
 ]

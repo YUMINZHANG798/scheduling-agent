@@ -51,8 +51,8 @@ start_backend() {
 
   ensure_port_free 8000
   echo "Starting backend..."
-  nohup bash -c "cd '$ROOT_DIR/backend' && exec env PYTHONPATH=. .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000" \
-    > "$LOG_DIR/backend.log" 2>&1 &
+  nohup bash -c "cd '$ROOT_DIR/backend' && exec env PYTHONPATH=. .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000" \
+    < /dev/null > "$LOG_DIR/backend.log" 2>&1 &
   echo "$!" > "$BACKEND_PID_FILE"
   wait_for_url "http://127.0.0.1:8000/health" "Backend"
 }

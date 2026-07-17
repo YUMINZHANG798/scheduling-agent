@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -131,9 +132,17 @@ CREATE TABLE IF NOT EXISTS hc_suggestions (
 
 
 class SQLiteStore:
+    _runtime_versions_by_db: dict[str, dict[str, dict[str, Any]]] = {}
+    _runtime_interventions_by_db: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    _runtime_sequence_by_db: dict[str, int] = {}
+
     def __init__(self, db_path: Path | None = None, seed_loader: SeedLoader | None = None) -> None:
         self.db_path = db_path or get_settings().database_path
         self.seed_loader = seed_loader or SeedLoader()
+        self.runtime_key = str(self.db_path.resolve())
+        self.runtime_versions = self._runtime_versions_by_db.setdefault(self.runtime_key, {})
+        self.runtime_interventions = self._runtime_interventions_by_db.setdefault(self.runtime_key, {})
+        self._runtime_sequence_by_db.setdefault(self.runtime_key, 0)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
@@ -162,6 +171,9 @@ class SQLiteStore:
             conn.execute("ALTER TABLE schedule_versions ADD COLUMN staffing_summary_payload TEXT")
 
     def reset(self) -> None:
+        self.runtime_versions.clear()
+        self.runtime_interventions.clear()
+        self._runtime_sequence_by_db[self.runtime_key] = 0
         with self.connect() as conn:
             for table in [
                 "intervention_records",
@@ -182,6 +194,24 @@ class SQLiteStore:
             ]:
                 conn.execute(f"DELETE FROM {table}")
             self.load_static_seed(conn)
+
+    def save_runtime_version(self, payload: dict[str, Any]) -> None:
+        self._runtime_sequence_by_db[self.runtime_key] += 1
+        self.runtime_versions[payload["version_id"]] = deepcopy({
+            "version_id": payload["version_id"],
+            "store_id": payload["store_id"],
+            "week_start": payload["week_start"],
+            "generated_at": payload["generated_at"],
+            "agent_summary": payload["agent_summary"],
+            "agent_fallback": bool(payload["agent_fallback"]),
+            "staffing_summary": payload.get("staffing_summary"),
+            "demand_results": payload["demand_results"],
+            "schedule_items": payload["schedule_items"],
+            "risks": payload["risks"],
+            "intervention_count": 0,
+            "_runtime_sequence": self._runtime_sequence_by_db[self.runtime_key],
+        })
+        self.runtime_interventions[payload["version_id"]] = []
 
     def load_static_seed(self, conn: sqlite3.Connection) -> None:
         data = self.seed_loader.all()
@@ -244,6 +274,11 @@ class SQLiteStore:
                 )
 
     def get_version(self, version_id: str) -> dict[str, Any] | None:
+        if version_id in self.runtime_versions:
+            version = deepcopy(self.runtime_versions[version_id])
+            version["intervention_count"] = len(self.runtime_interventions.get(version_id, []))
+            return version
+
         with self.connect() as conn:
             version = conn.execute("SELECT * FROM schedule_versions WHERE id = ?", (version_id,)).fetchone()
             if not version:
@@ -278,6 +313,10 @@ class SQLiteStore:
         }
 
     def update_version_staffing_summary(self, version_id: str, staffing_summary: dict[str, Any]) -> None:
+        if version_id in self.runtime_versions:
+            self.runtime_versions[version_id]["staffing_summary"] = deepcopy(staffing_summary)
+            return
+
         with self.connect() as conn:
             conn.execute(
                 "UPDATE schedule_versions SET staffing_summary_payload = ? WHERE id = ?",
@@ -285,6 +324,15 @@ class SQLiteStore:
             )
 
     def get_latest_version(self, store_id: str, week_start: str) -> dict[str, Any] | None:
+        runtime = [
+            version
+            for version in self.runtime_versions.values()
+            if version["store_id"] == store_id and version["week_start"] == week_start
+        ]
+        if runtime:
+            latest = max(runtime, key=lambda row: (row["generated_at"], row.get("_runtime_sequence", 0)))
+            return self.get_version(latest["version_id"])
+
         with self.connect() as conn:
             row = conn.execute(
                 """
@@ -298,6 +346,17 @@ class SQLiteStore:
         if not row:
             return None
         return self.get_version(row["id"])
+
+    def get_latest_runtime_version(self, store_id: str, week_start: str) -> dict[str, Any] | None:
+        runtime = [
+            version
+            for version in self.runtime_versions.values()
+            if version["store_id"] == store_id and version["week_start"] == week_start
+        ]
+        if not runtime:
+            return None
+        latest = max(runtime, key=lambda row: (row["generated_at"], row.get("_runtime_sequence", 0)))
+        return self.get_version(latest["version_id"])
 
     def list_versions(self, store_id: str | None = None, week_start: str | None = None) -> list[dict[str, Any]]:
         sql = """
@@ -328,16 +387,50 @@ class SQLiteStore:
             ORDER BY v.generated_at DESC, v.rowid DESC
         """
         with self.connect() as conn:
-            return [dict(row) for row in conn.execute(sql, params).fetchall()]
+            rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+        runtime_rows = [
+            {
+                "id": version["version_id"],
+                "store_id": version["store_id"],
+                "week_start": version["week_start"],
+                "generated_at": version["generated_at"],
+                "agent_summary": version["agent_summary"],
+                "schedule_item_count": len(version["schedule_items"]),
+                "intervention_count": len(self.runtime_interventions.get(version["version_id"], [])),
+                "_runtime_sequence": version.get("_runtime_sequence", 0),
+            }
+            for version in self.runtime_versions.values()
+            if (not store_id or version["store_id"] == store_id)
+            and (not week_start or version["week_start"] == week_start)
+        ]
+        return sorted(
+            [*runtime_rows, *rows],
+            key=lambda row: (row["generated_at"], row.get("_runtime_sequence", 0)),
+            reverse=True,
+        )
 
     def update_schedule_item(self, version_id: str, item_id: str, item: dict[str, Any]) -> None:
+        if version_id in self.runtime_versions:
+            version = self.runtime_versions[version_id]
+            version["schedule_items"] = [
+                deepcopy(item) if row["id"] == item_id else row
+                for row in version["schedule_items"]
+            ]
+            return
+
         with self.connect() as conn:
             conn.execute(
-                "UPDATE schedule_items SET payload = ? WHERE version_id = ? AND id = ?",
+                "UPDATE schedule_items SET payload = ? WHERE version_id = ? AND json_extract(payload, '$.id') = ?",
                 (json.dumps(item, ensure_ascii=False), version_id, item_id),
             )
 
     def add_intervention(self, record: dict[str, Any]) -> None:
+        version_id = record["version_id"]
+        if version_id in self.runtime_versions:
+            self.runtime_interventions.setdefault(version_id, []).append(deepcopy(record))
+            return
+
         with self.connect() as conn:
             conn.execute(
                 """
@@ -358,6 +451,9 @@ class SQLiteStore:
             )
 
     def interventions(self, version_id: str) -> list[dict[str, Any]]:
+        if version_id in self.runtime_versions:
+            return deepcopy(list(reversed(self.runtime_interventions.get(version_id, []))))
+
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT * FROM intervention_records WHERE version_id = ? ORDER BY created_at DESC", (version_id,)

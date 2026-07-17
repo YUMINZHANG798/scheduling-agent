@@ -50,6 +50,7 @@ class SchedulingGenerator:
         preferences = self._preferences(week_start)
         schedule_items: list[dict[str, Any]] = []
         employee_hours: Counter[str] = Counter()
+        employee_days: Counter[str] = Counter()
         demand_by_day_area = self._demand_by_day_area(demand_results)
         regular_pool_by_area = self._regular_pool_by_area(demand_results)
 
@@ -69,11 +70,10 @@ class SchedulingGenerator:
                     and emp["id"] not in approved_leave
                     and emp["is_active"]
                 ]
-                regulars.sort(key=lambda emp: (not emp.get("is_protected"), employee_hours[emp["id"]], emp["id"]))
                 baseline_min = int(area["baseline_min"])
-                professional_total = [emp for emp in regulars if self._has_professional_skill(emp["id"], area_code)]
-                needed_professionals = min(4, len(professional_total)) if self._has_professional_tasks(area_code) else 0
                 day_demands = demand_by_day_area.get((current_text, area_code), [])
+                professional_total = [emp for emp in regulars if self._has_professional_skill(emp["id"], area_code)]
+                needed_professionals = self._daily_professional_target(area_code, day_demands, len(professional_total))
                 target = self._daily_regular_target(
                     area_code,
                     area,
@@ -81,12 +81,28 @@ class SchedulingGenerator:
                     len(regulars),
                     needed_professionals,
                 )
+                professional_total.sort(
+                    key=lambda emp: (
+                        employee_days[emp["id"]],
+                        employee_hours[emp["id"]],
+                        self._rotation_index(emp["id"], offset),
+                    )
+                )
                 scheduled_regulars = professional_total[:needed_professionals]
-                for emp in regulars:
+                selected_ids = {emp["id"] for emp in scheduled_regulars}
+                remaining_regulars = [emp for emp in regulars if emp["id"] not in selected_ids]
+                remaining_regulars.sort(
+                    key=lambda emp: (
+                        employee_days[emp["id"]],
+                        employee_hours[emp["id"]],
+                        bool(emp.get("is_protected")),
+                        self._rotation_index(emp["id"], offset),
+                    )
+                )
+                for emp in remaining_regulars:
                     if len(scheduled_regulars) >= target:
                         break
-                    if emp["id"] not in {scheduled["id"] for scheduled in scheduled_regulars}:
-                        scheduled_regulars.append(emp)
+                    scheduled_regulars.append(emp)
                 professional_capable = [
                     emp
                     for emp in scheduled_regulars
@@ -108,10 +124,18 @@ class SchedulingGenerator:
                         non_sole_position += 1
                     if shift_type == "rotating":
                         shift_type = "morning" if (offset + int(emp["id"].split("_")[1])) % 2 == 0 else "evening"
-                    task = self._best_regular_task(emp["id"], area_code)
+                    task = self._regular_task_for_shift(
+                        emp["id"],
+                        area_code,
+                        current_text,
+                        position,
+                        shift_type,
+                        day_demands,
+                    )
                     slot = SHIFT_SLOTS.get(shift_type, SHIFT_SLOTS["morning"])
                     hours = self._slot_hours(slot)
                     employee_hours[emp["id"]] += hours
+                    employee_days[emp["id"]] += 1
                     schedule_items.append(
                         self._item(
                             version_id,
@@ -126,7 +150,7 @@ class SchedulingGenerator:
                             shift_type,
                             hours,
                             int(task["is_professional"]),
-                            f"{emp['name']}为{area['name']}正式工，按{self._shift_label(shift_type)}覆盖{task['task_name']}；正式工不跨区排班。",
+                            f"{emp['name']}为{area['name']}正式工，按{self._shift_label(shift_type)}主要负责{task['task_name']}；正式工不跨区排班，专业师傅同时承担关键时段兜底。",
                         )
                     )
 
@@ -553,6 +577,34 @@ class SchedulingGenerator:
 
         return min(available_count, target)
 
+    def _daily_professional_target(
+        self,
+        area_code: str,
+        day_demands: list[dict[str, Any]],
+        available_count: int,
+    ) -> int:
+        if not self._has_professional_tasks(area_code) or available_count <= 0:
+            return 0
+
+        professional_demands = [
+            demand
+            for demand in day_demands
+            if self.tasks[(demand["area_code"], demand["task_code"])]["is_professional"]
+        ]
+        if not professional_demands:
+            return 0
+
+        max_required = max(demand.get("professional_required_count", demand["required_count"]) for demand in professional_demands)
+        high_professional_slots = sum(
+            1
+            for demand in professional_demands
+            if demand["priority"] == "high" or int(demand["demand_score"]) >= 78
+        )
+        target = max(2, max_required + 1)
+        if high_professional_slots >= 6:
+            target += 1
+        return min(available_count, target, 3)
+
     def _high_slot_count(self, demands: list[dict[str, Any]]) -> int:
         return len({
             demand["slot"]
@@ -579,17 +631,81 @@ class SchedulingGenerator:
             if row["week_start"] == week_start
         }
 
-    def _best_regular_task(self, employee_id: str, area_code: str) -> dict[str, Any]:
+    def _regular_task_for_shift(
+        self,
+        employee_id: str,
+        area_code: str,
+        date_text: str,
+        position: int,
+        shift_type: str,
+        day_demands: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         tasks = self.tasks_by_area[area_code]
-        task_scores = []
-        for task in tasks:
-            skill = self.skills.get((employee_id, area_code, task["task_code"]))
-            if not skill:
-                continue
-            task_scores.append((task["is_professional"], SKILL_RANK[skill["skill_level"]], task["priority"], task))
-        if not task_scores:
+        skilled_tasks = [
+            task
+            for task in tasks
+            if (employee_id, area_code, task["task_code"]) in self.skills
+        ]
+        if not skilled_tasks:
             return self._non_professional_task(area_code)
-        return sorted(task_scores, reverse=True, key=lambda row: row[:3])[0][3]
+
+        professional_tasks = [task for task in skilled_tasks if task["is_professional"]]
+        non_professional_tasks = [task for task in skilled_tasks if not task["is_professional"]]
+        day_number = int(date_text[-2:])
+
+        if professional_tasks:
+            task_by_code = {task["task_code"]: task for task in skilled_tasks}
+            core_professional_slots = {
+                demand["slot"]
+                for demand in day_demands
+                if self.tasks[(demand["area_code"], demand["task_code"])]["is_professional"]
+                and demand.get("professional_required_count", 0) >= 2
+            }
+
+            if area_code == "aquatic":
+                if shift_type == "morning" and {"09:00-10:00", "10:00-11:00"} & core_professional_slots and "fish_butcher" in task_by_code:
+                    return task_by_code["fish_butcher"]
+                if shift_type in {"evening", "split"} and {"17:00-18:00", "18:00-19:00"} & core_professional_slots:
+                    return task_by_code.get("aquatic_process") or task_by_code.get("fish_butcher") or professional_tasks[0]
+                return (
+                    task_by_code.get("weighing")
+                    or task_by_code.get("aquatic_process")
+                    or task_by_code.get("cleaning")
+                    or professional_tasks[0]
+                )
+
+            if area_code == "meat":
+                if shift_type == "morning" and {"09:00-10:00", "10:00-11:00"} & core_professional_slots and "meat_cut" in task_by_code:
+                    return task_by_code["meat_cut"]
+                if shift_type in {"evening", "split"} and {"17:00-18:00", "18:00-19:00"} & core_professional_slots:
+                    return task_by_code.get("meat_divide") or task_by_code.get("meat_cut") or professional_tasks[0]
+                return (
+                    task_by_code.get("weighing")
+                    or task_by_code.get("display")
+                    or task_by_code.get("meat_divide")
+                    or professional_tasks[0]
+                )
+
+            ordered_non_professional = sorted(non_professional_tasks, key=lambda task: (-task["priority"], task["task_code"]))
+            if ordered_non_professional:
+                return ordered_non_professional[(day_number + position) % len(ordered_non_professional)]
+            return sorted(professional_tasks, key=lambda task: (-task["priority"], task["task_code"]))[0]
+
+        return sorted(
+            non_professional_tasks,
+            key=lambda task: (
+                -SKILL_RANK[self.skills[(employee_id, area_code, task["task_code"])]["skill_level"]],
+                (day_number + position + task["priority"]) % max(1, len(non_professional_tasks)),
+                -task["priority"],
+            ),
+        )[0]
+
+    def _best_regular_task(self, employee_id: str, area_code: str) -> dict[str, Any]:
+        return self._regular_task_for_shift(employee_id, area_code, "2026-01-01", 0, "morning", [])
+
+    def _rotation_index(self, employee_id: str, offset: int) -> int:
+        numeric_id = int(employee_id.split("_")[1])
+        return (numeric_id + offset * 7) % 97
 
     def _has_professional_skill(self, employee_id: str, area_code: str) -> bool:
         for task in self.tasks_by_area[area_code]:
@@ -609,7 +725,7 @@ class SchedulingGenerator:
         if count == 1:
             return ["split"]
         if count == 2:
-            return ["split", "split"]
+            return ["morning", "evening"]
         if count == 3:
             return ["morning", "evening", "split"]
         return ["morning", "evening", "morning", "evening"] + ["split"] * max(0, count - 4)
@@ -649,7 +765,7 @@ class SchedulingGenerator:
         if employee_id not in professional_ids:
             return False
         off_count = sum(1 for eid in approved[(date_text, area_code)] if eid in professional_ids)
-        min_available = min(2, len(professional_ids))
+        min_available = min(3, len(professional_ids))
         return len(professional_ids) - off_count - 1 < min_available
 
     def _non_professional_task(self, area_code: str) -> dict[str, Any]:

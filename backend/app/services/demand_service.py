@@ -75,6 +75,8 @@ class DemandService:
                     task = self._pick_task(area_code, slot, score)
                     final_score = min(100, round(score))
                     required_count = self._required_count(area, final_score, task["is_professional"])
+                    if task["is_professional"] and not self._is_core_professional_slot(task["task_code"], slot):
+                        required_count = 1
                     labor_breakdown = self._labor_breakdown(area, task, final_score, required_count)
                     demand_results.append(
                         {
@@ -183,22 +185,51 @@ class DemandService:
 
     def _pick_task(self, area_code: str, slot: str, score: float) -> dict[str, Any]:
         tasks = self.tasks_by_area[area_code]
-        professional = [task for task in tasks if task["is_professional"]]
         non_professional = [task for task in tasks if not task["is_professional"]]
-        protected_professional_slots = {
-            "08:00-09:00",
-            "09:00-10:00",
-            "10:00-11:00",
-            "17:00-18:00",
-            "18:00-19:00",
-            "19:00-20:00",
-            "20:00-21:00",
-        }
-        if professional and slot in protected_professional_slots:
-            return professional[0]
+        task_by_code = {task["task_code"]: task for task in tasks}
+
+        if area_code == "aquatic":
+            if slot in {"09:00-10:00", "10:00-11:00", "17:00-18:00", "18:00-19:00"}:
+                return task_by_code["fish_butcher"]
+            if slot in {"08:00-09:00", "11:00-12:00", "16:00-17:00", "19:00-20:00"}:
+                return task_by_code["aquatic_process"]
+            if slot in {"12:00-13:00", "13:00-14:00", "21:00-22:00"}:
+                return task_by_code["cleaning"]
+            return task_by_code["weighing"]
+
+        if area_code == "meat":
+            if slot in {"09:00-10:00", "10:00-11:00", "16:00-17:00", "17:00-18:00"}:
+                return task_by_code["meat_cut"]
+            if slot in {"08:00-09:00", "11:00-12:00", "18:00-19:00"}:
+                return task_by_code["meat_divide"]
+            if slot in {"12:00-13:00", "13:00-14:00", "20:00-21:00"}:
+                return task_by_code["display"]
+            return task_by_code["weighing"]
+
+        if area_code == "produce":
+            if slot in {"08:00-09:00", "09:00-10:00", "16:00-17:00", "17:00-18:00", "18:00-19:00"}:
+                return task_by_code["restock"]
+            if slot in {"10:00-11:00", "11:00-12:00", "19:00-20:00"}:
+                return task_by_code["weighing"]
+            if slot in {"12:00-13:00", "13:00-14:00", "20:00-21:00"}:
+                return task_by_code["packing"]
+            return task_by_code["display"]
+
+        if area_code == "cashier":
+            if slot in {"10:00-11:00", "11:00-12:00", "17:00-18:00", "18:00-19:00", "19:00-20:00"} or score >= 74:
+                return task_by_code["cashier"]
+            return task_by_code["customer_service"]
+
+        if area_code == "replenishment":
+            if slot in {"08:00-09:00", "09:00-10:00", "16:00-17:00"}:
+                return task_by_code["restock_unload"]
+            if slot in {"12:00-13:00", "13:00-14:00", "20:00-21:00"}:
+                return task_by_code["inventory"]
+            return task_by_code["shelf_restock"]
+
         if non_professional:
             return non_professional[0]
-        return (professional or non_professional)[0]
+        return tasks[0]
 
     def _required_count(self, area: dict[str, Any], score: int, is_professional: int) -> int:
         if is_professional:
@@ -236,3 +267,11 @@ class DemandService:
             "regular_required_count": regular_required,
             "temporary_required_count": temporary_required,
         }
+
+    def _is_core_professional_slot(self, task_code: str, slot: str) -> bool:
+        return slot in {
+            "09:00-10:00",
+            "10:00-11:00",
+            "17:00-18:00",
+            "18:00-19:00",
+        } and task_code in {"fish_butcher", "meat_cut"}

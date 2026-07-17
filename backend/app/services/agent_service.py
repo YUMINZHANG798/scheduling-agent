@@ -219,13 +219,9 @@ class AgentService:
 
         llm_payload = self._structured_completion(
             self._schedule_explanation_messages(version),
-            fallback_message="LLM 调用失败，请检查模型配置或稍后重试。",
-            fallback_sections=self._fallback_schedule_sections(version),
-            fallback_questions=[
-                "哪些时段的高峰缺口最大？",
-                "为什么这周临时工占比更高？",
-                "哪几个风险最需要店长关注？",
-            ],
+            fallback_message="正在等待 LLM 返回排班解释，请稍候。",
+            fallback_sections=[],
+            fallback_questions=[],
         )
         return {
             "intent": "schedule_explanation",
@@ -493,7 +489,7 @@ class AgentService:
                 }],
                 "suggested_questions": [
                     "周一水产谁上班？",
-                    "小宋都是哪几天上班？",
+                    "宋建华都是哪几天上班？",
                     "周五晚上收银有哪些人？",
                 ],
             }
@@ -561,7 +557,7 @@ class AgentService:
             "suggested_questions": [
                 "这些人分别负责什么任务？",
                 "这个时段有没有风险？",
-                "小宋都是哪几天上班？",
+                "宋建华都是哪几天上班？",
             ],
         }
 

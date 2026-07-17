@@ -91,9 +91,10 @@ export function App() {
       setHasCurrentSessionSchedule(true);
       setViewingHistory(false);
       setRescheduleFrom(undefined);
-      void refreshVersions();
+      await refreshVersions();
       setLoading(false);
       setAgentThinking(true);
+      setMessages([{ role: "assistant", content: "班表已生成，正在生成排班解释..." }]);
       let streamed = "";
       let hasStreamMessage = false;
       try {
@@ -119,15 +120,24 @@ export function App() {
           setMessages([{ role: "assistant", content: streamed }]);
           return;
         }
-        const explanation = await api.scheduleExplanation(response.version_id);
-        setMessages([
-          {
-            role: "assistant",
-            content: explanation.message,
-            sections: explanation.sections,
-            suggested_questions: explanation.suggested_questions
-          }
-        ]);
+        try {
+          const explanation = await api.scheduleExplanation(response.version_id);
+          setMessages([
+            {
+              role: "assistant",
+              content: explanation.message,
+              sections: explanation.sections,
+              suggested_questions: explanation.suggested_questions
+            }
+          ]);
+        } catch (explainErr) {
+          setMessages([
+            {
+              role: "assistant",
+              content: "班表已生成，正在等待 LLM 返回排班解释。"
+            }
+          ]);
+        }
       } finally {
         setAgentThinking(false);
       }
@@ -149,20 +159,7 @@ export function App() {
   }
 
   async function loadInitialSchedule() {
-    const rows = await refreshVersions();
-    const latest = rows.find((version) => version.schedule_item_count > 0);
-    if (!latest) return;
-    try {
-      const response = await api.getSchedule(latest.id);
-      setSchedule(response);
-      setCurrentVersion(response);
-      currentVersionRef.current = response;
-      setHasCurrentSessionSchedule(true);
-      setViewingHistory(false);
-      setMessages([{ role: "assistant", content: "已自动打开最近一次历史排班记录。你可以直接查看，也可以点击生成下周排班重新计算。" }]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加载最近历史排班失败");
-    }
+    await refreshVersions();
   }
 
   async function returnToCurrentSchedule() {
@@ -216,16 +213,14 @@ export function App() {
     setError("");
     try {
       await api.resetDemo();
-      const rows = await refreshVersions();
-      const latest = rows.find((version) => version.schedule_item_count > 0);
-      if (!latest) throw new Error("Demo 历史排班样本生成失败");
-      const response = await api.getSchedule(latest.id);
-      setSchedule(response);
-      setCurrentVersion(response);
-      currentVersionRef.current = response;
-      setHasCurrentSessionSchedule(true);
+      await refreshVersions();
+      setSchedule(null);
+      setCurrentVersion(null);
+      currentVersionRef.current = null;
+      setHasCurrentSessionSchedule(false);
       setViewingHistory(false);
-      setMessages([{ role: "assistant", content: "Demo 数据已重置，已打开最新一份合理波动的历史排班样本。" }]);
+      setAgentThinking(false);
+      setMessages([{ role: "assistant", content: "Demo 数据已重置，本次运行生成的排班已清空。点击生成下周排班后会进入本次历史，重启服务后不会保留。" }]);
       setAgentInput("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "重置失败");
@@ -362,7 +357,7 @@ export function App() {
           <span className="week-pill">2026-07-13 至 2026-07-19</span>
           <button className="icon-button secondary" onClick={reset} disabled={loading} title="重置 Demo">↻</button>
           <button className="primary-button" onClick={generate} disabled={loading}>
-            {loading ? "处理中..." : viewingHistory ? "回到本周排班表" : "生成下周排班"}
+            {loading ? "处理中..." : viewingHistory ? "回到本周排班表" : schedule ? "重新生成" : "生成下周排班"}
           </button>
         </div>
       </header>
@@ -543,7 +538,7 @@ function HistoryPanel({
             <span>{version.week_start} · {version.schedule_item_count} 条</span>
           </button>
         ))}
-        {!versions.length && <p className="muted">生成排班后会保存历史版本。</p>}
+        {!versions.length && <p className="muted">生成排班后会显示在本次运行历史，重启服务后清空。</p>}
         {!!versions.length && !filteredVersions.length && <p className="muted">没有匹配的历史排班。</p>}
       </div>
     </div>

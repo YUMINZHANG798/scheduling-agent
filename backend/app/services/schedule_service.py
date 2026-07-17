@@ -37,7 +37,7 @@ class ScheduleService:
         payload = self._merge_frozen_schedule(request, payload)
         payload["demand_insights"] = insights
         payload["staffing_summary"] = self._staffing_summary(payload["week_start"], payload["schedule_items"])
-        self.store.save_version(payload)
+        self.store.save_runtime_version(payload)
         return ScheduleResponse(**payload)
 
     def reset_demo(self) -> None:
@@ -82,12 +82,6 @@ class ScheduleService:
                     {"weekday": "Saturday", "slots": {"10:00-11:00", "11:00-12:00", "17:00-18:00", "18:00-19:00"}, "areas": {"aquatic", "meat", "produce"}, "factor": 1.13, "label": "暑期家庭采购上浮"},
                     {"weekday": "Sunday", "slots": {"10:00-11:00", "11:00-12:00", "18:00-19:00"}, "areas": {"aquatic", "meat"}, "factor": 1.1, "label": "周末家庭备餐高峰"},
                 ],
-            },
-            {
-                "week_start": "2026-07-13",
-                "generated_at": "2026-07-12T13:40:00Z",
-                "summary": "本周雨天促销预测周",
-                "adjustments": [],
             },
         ]
         expected_ids = {f"hist_{profile['week_start'].replace('-', '')}" for profile in profiles}
@@ -167,7 +161,7 @@ class ScheduleService:
     def versions(self, store_id: str | None = None, week_start: str | None = None) -> list[dict[str, Any]]:
         return [
             {
-                **row,
+                **{key: value for key, value in row.items() if not key.startswith("_")},
                 "store_name": self.settings.store_name,
                 "is_latest": index == 0,
             }
@@ -492,6 +486,8 @@ class ScheduleService:
                     final_score,
                     task["is_professional"],
                 )
+                if task["is_professional"] and not self.demand_service._is_core_professional_slot(task["task_code"], row["slot"]):
+                    required_count = 1
                 labor_breakdown = self.demand_service._labor_breakdown(
                     self.demand_service.areas[row["area_code"]],
                     task,
@@ -563,7 +559,7 @@ class ScheduleService:
         request: GenerateScheduleRequest,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        previous = self.store.get_latest_version(request.store_id, request.week_start)
+        previous = self.store.get_latest_runtime_version(request.store_id, request.week_start)
         freeze_before = self._freeze_before_date(request, bool(previous))
         if not previous or not freeze_before:
             return payload

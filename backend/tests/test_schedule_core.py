@@ -76,7 +76,7 @@ class ScheduleCoreTest(unittest.TestCase):
         self.assertLess(summary.regular.scheduled_count, summary.regular.total_count)
         self.assertGreaterEqual(summary.regular.scheduled_count, summary.regular.total_count - 10)
 
-    def test_lists_saved_schedule_versions(self):
+    def test_generated_schedule_is_listed_for_current_runtime(self):
         first = self.service.generate(
             GenerateScheduleRequest(store_id="fresh_store_001", week_start="2026-07-06")
         )
@@ -88,8 +88,10 @@ class ScheduleCoreTest(unittest.TestCase):
         self.assertEqual(versions[0]["id"], second.version_id)
         self.assertEqual(versions[1]["id"], first.version_id)
         self.assertGreater(versions[0]["schedule_item_count"], 0)
+        self.assertIsNotNone(self.service.get(first.version_id))
+        self.assertIsNotNone(self.service.get(second.version_id))
 
-    def test_get_schedule_uses_saved_staffing_snapshot(self):
+    def test_get_schedule_uses_runtime_staffing_snapshot(self):
         response = self.service.generate(
             GenerateScheduleRequest(store_id="fresh_store_001", week_start="2026-07-13")
         )
@@ -102,16 +104,15 @@ class ScheduleCoreTest(unittest.TestCase):
         self.assertEqual(loaded.staffing_summary.total.total_count, 88)
         self.assertEqual(loaded.staffing_summary.total.unscheduled_count, 10)
 
-    def test_reset_rebuilds_demo_schedule_history(self):
+    def test_reset_clears_runtime_schedule_and_rebuilds_demo_history(self):
         response = self.service.generate(
             GenerateScheduleRequest(store_id="fresh_store_001", week_start="2026-07-13")
         )
         self.service.reset_demo()
         versions = self.service.versions()
         self.assertIsNone(self.service.get(response.version_id))
-        self.assertGreaterEqual(len(versions), 5)
-        self.assertTrue(all(row["schedule_item_count"] > 0 for row in versions))
-        self.assertGreaterEqual(len({row["week_start"] for row in versions}), 5)
+        self.assertGreaterEqual(len(versions), 4)
+        self.assertTrue(all(row["id"].startswith("hist_") for row in versions))
 
     def test_agent_recommends_temporary_support(self):
         response = self.service.generate(
@@ -128,14 +129,14 @@ class ScheduleCoreTest(unittest.TestCase):
             GenerateScheduleRequest(store_id="fresh_store_001", week_start="2026-07-13")
         )
         result = self.agent.chat(
-            "小宋都是哪几天上班",
+            "宋建华都是哪几天上班",
             response.version_id,
             {"date": "2026-07-17", "slot": "18:00-19:00", "area_code": "produce"},
             [],
         )
         self.assertEqual(result["intent"], "schedule_fact_query")
         self.assertFalse(result["is_fallback"])
-        self.assertIn("小宋", result["message"])
+        self.assertIn("宋建华", result["message"])
         self.assertTrue(result["sections"][0]["bullets"])
 
     def test_agent_enhances_fact_query_with_llm_analysis(self):
@@ -146,15 +147,15 @@ class ScheduleCoreTest(unittest.TestCase):
             self.service.store,
             self.service.generator,
             FakeLlmClient(
-                '{"answer":"小宋本周排班较集中，主要覆盖固定时段。","sections":[{"title":"分析判断","bullets":["当前回答基于已检索到的排班明细。","从已知排班看，小宋承担的是稳定覆盖角色。"]}],"suggested_questions":["小宋在哪些区域上班？"]}'
+                '{"answer":"宋建华本周排班较集中，主要覆盖固定时段。","sections":[{"title":"分析判断","bullets":["当前回答基于已检索到的排班明细。","从已知排班看，宋建华承担的是稳定覆盖角色。"]}],"suggested_questions":["宋建华在哪些区域上班？"]}'
             ),
         )
-        result = agent.chat("小宋都是哪几天上班", response.version_id, {}, [])
+        result = agent.chat("宋建华都是哪几天上班", response.version_id, {}, [])
         self.assertEqual(result["intent"], "schedule_fact_query")
-        self.assertEqual(result["message"], "小宋本周排班较集中，主要覆盖固定时段。")
-        self.assertEqual(result["sections"][0]["title"], "小宋排班明细")
+        self.assertEqual(result["message"], "宋建华本周排班较集中，主要覆盖固定时段。")
+        self.assertEqual(result["sections"][0]["title"], "宋建华排班明细")
         self.assertTrue(any(section["title"] == "分析判断" for section in result["sections"]))
-        self.assertEqual(result["suggested_questions"], ["小宋在哪些区域上班？"])
+        self.assertEqual(result["suggested_questions"], ["宋建华在哪些区域上班？"])
 
     def test_manual_modify_records_intervention(self):
         response = self.service.generate(

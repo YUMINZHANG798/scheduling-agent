@@ -10,7 +10,7 @@ router = APIRouter(prefix="/demo", tags=["demo"])
 @router.post("/reset")
 def reset_demo(service: ScheduleService = Depends(get_schedule_service)):
     service.reset_demo()
-    return {"ok": True, "message": "Demo 数据已重置，已生成合理波动的历史排班样本"}
+    return {"ok": True, "message": "Demo 数据已重置，本次运行生成的排班已清空"}
 
 
 @router.get("/source-data")

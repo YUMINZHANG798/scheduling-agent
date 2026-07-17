@@ -18,11 +18,11 @@ SLOT_INDEX = {s: i for i, s in enumerate(SLOTS)}
 REGULAR_SHIFTS = ["08:00-16:00", "14:00-22:00", "08:00-12:00,17:00-21:00"]
 
 AREAS = [
-    {"code": "aquatic",      "name": "水产区",     "allow_mixed": True,  "baseline_min": 2, "baseline_max": 3, "sort_order": 1},
-    {"code": "meat",         "name": "肉类区",     "allow_mixed": True,  "baseline_min": 2, "baseline_max": 3, "sort_order": 2},
-    {"code": "produce",      "name": "果蔬区",     "allow_mixed": True,  "baseline_min": 1, "baseline_max": 2, "sort_order": 3},
-    {"code": "cashier",      "name": "收银/前场",  "allow_mixed": True,  "baseline_min": 1, "baseline_max": 2, "sort_order": 4},
-    {"code": "replenishment","name": "补货区",     "allow_mixed": True,  "baseline_min": 1, "baseline_max": 2, "sort_order": 5},
+    {"code": "aquatic",      "name": "水产区",     "allow_mixed": True,  "baseline_min": 2, "baseline_max": 4, "sort_order": 1},
+    {"code": "meat",         "name": "肉类区",     "allow_mixed": True,  "baseline_min": 2, "baseline_max": 4, "sort_order": 2},
+    {"code": "produce",      "name": "果蔬区",     "allow_mixed": True,  "baseline_min": 3, "baseline_max": 5, "sort_order": 3},
+    {"code": "cashier",      "name": "收银/前场",  "allow_mixed": True,  "baseline_min": 3, "baseline_max": 6, "sort_order": 4},
+    {"code": "replenishment","name": "补货区",     "allow_mixed": True,  "baseline_min": 2, "baseline_max": 4, "sort_order": 5},
 ]
 AREA_CODES = [a["code"] for a in AREAS]
 
