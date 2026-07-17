@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import tempfile
 import unittest
 from pathlib import Path
@@ -71,6 +73,8 @@ class ScheduleCoreTest(unittest.TestCase):
         )
         self.assertGreater(summary.total.total_count, 0)
         self.assertGreater(summary.total.scheduled_count, 0)
+        self.assertLess(summary.regular.scheduled_count, summary.regular.total_count)
+        self.assertGreaterEqual(summary.regular.scheduled_count, summary.regular.total_count - 10)
 
     def test_lists_saved_schedule_versions(self):
         first = self.service.generate(
@@ -98,13 +102,16 @@ class ScheduleCoreTest(unittest.TestCase):
         self.assertEqual(loaded.staffing_summary.total.total_count, 88)
         self.assertEqual(loaded.staffing_summary.total.unscheduled_count, 10)
 
-    def test_reset_preserves_schedule_history(self):
+    def test_reset_rebuilds_demo_schedule_history(self):
         response = self.service.generate(
             GenerateScheduleRequest(store_id="fresh_store_001", week_start="2026-07-13")
         )
-        self.service.store.reset()
-        self.assertIsNotNone(self.service.get(response.version_id))
-        self.assertTrue(any(row["id"] == response.version_id for row in self.service.versions()))
+        self.service.reset_demo()
+        versions = self.service.versions()
+        self.assertIsNone(self.service.get(response.version_id))
+        self.assertGreaterEqual(len(versions), 5)
+        self.assertTrue(all(row["schedule_item_count"] > 0 for row in versions))
+        self.assertGreaterEqual(len({row["week_start"] for row in versions}), 5)
 
     def test_agent_recommends_temporary_support(self):
         response = self.service.generate(

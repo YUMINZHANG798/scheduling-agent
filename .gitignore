@@ -10,3 +10,4 @@ backend/app/data/*.sqlite
 backend/app/data/*.sqlite-*
 backend/config/llm.json
 *.log
+.runtime/

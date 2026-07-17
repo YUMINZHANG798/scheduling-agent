@@ -13,16 +13,21 @@ from app.models.schemas import KpiResult
 WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 SHIFT_SLOTS = {
     "morning": "08:00-16:00",
+    "midday": "10:00-18:00",
     "evening": "14:00-22:00",
     "split": "08:00-12:00,17:00-21:00",
 }
 SLOT_RANGES = {
     "08:00-16:00": [(8, 16)],
+    "10:00-18:00": [(10, 18)],
     "14:00-22:00": [(14, 22)],
     "08:00-12:00,17:00-21:00": [(8, 12), (17, 21)],
     "18:00-21:00": [(18, 21)],
+    "18:00-22:00": [(18, 22)],
     "10:00-14:00": [(10, 14)],
+    "14:00-18:00": [(14, 18)],
     "16:00-21:00": [(16, 21)],
+    "17:00-22:00": [(17, 22)],
 }
 SKILL_RANK = {"S": 4, "A": 3, "B": 2, "C": 1}
 
@@ -45,18 +50,22 @@ class SchedulingGenerator:
         preferences = self._preferences(week_start)
         schedule_items: list[dict[str, Any]] = []
         employee_hours: Counter[str] = Counter()
+        demand_by_day_area = self._demand_by_day_area(demand_results)
+        regular_pool_by_area = self._regular_pool_by_area(demand_results)
 
         start = datetime.strptime(week_start, "%Y-%m-%d").date()
         for offset in range(7):
             current = start + timedelta(days=offset)
+            current_text = current.isoformat()
             weekday = WEEKDAY_NAMES[current.weekday()]
             for area_code, area in self.areas.items():
-                approved_leave = leave_resolution.get((current.isoformat(), area_code), set())
+                approved_leave = leave_resolution.get((current_text, area_code), set())
                 regulars = [
                     emp
                     for emp in self.employees.values()
                     if emp["employee_type"] == "regular"
                     and emp["main_area"] == area_code
+                    and emp["id"] in regular_pool_by_area.get(area_code, set())
                     and emp["id"] not in approved_leave
                     and emp["is_active"]
                 ]
@@ -64,8 +73,14 @@ class SchedulingGenerator:
                 baseline_min = int(area["baseline_min"])
                 professional_total = [emp for emp in regulars if self._has_professional_skill(emp["id"], area_code)]
                 needed_professionals = min(4, len(professional_total)) if self._has_professional_tasks(area_code) else 0
-                area_target = baseline_min * 3 if self._has_professional_tasks(area_code) else baseline_min * 2
-                target = min(len(regulars), max(area_target, int(area["baseline_max"]), needed_professionals))
+                day_demands = demand_by_day_area.get((current_text, area_code), [])
+                target = self._daily_regular_target(
+                    area_code,
+                    area,
+                    day_demands,
+                    len(regulars),
+                    needed_professionals,
+                )
                 scheduled_regulars = professional_total[:needed_professionals]
                 for emp in regulars:
                     if len(scheduled_regulars) >= target:
@@ -80,6 +95,7 @@ class SchedulingGenerator:
                 professional_shift_plan = self._professional_shift_plan(len(professional_capable))
                 professional_shift_index = 0
                 non_sole_position = 0
+                non_professional_shift_plan = self._non_professional_shift_plan(baseline_min, day_demands)
                 for position, emp in enumerate(scheduled_regulars):
                     shift_type = preferences.get(emp["id"], emp.get("regular_shift_type") or "morning")
                     if self._has_professional_skill(emp["id"], area_code) and len(professional_capable) >= 2:
@@ -87,11 +103,8 @@ class SchedulingGenerator:
                         professional_shift_index += 1
                     elif self._has_professional_skill(emp["id"], area_code):
                         shift_type = "split"
-                    elif non_sole_position < baseline_min * 2:
-                        shift_type = "morning" if non_sole_position % 2 == 0 else "evening"
-                        non_sole_position += 1
-                    elif non_sole_position == baseline_min * 2:
-                        shift_type = "split"
+                    elif non_sole_position < len(non_professional_shift_plan):
+                        shift_type = non_professional_shift_plan[non_sole_position]
                         non_sole_position += 1
                     if shift_type == "rotating":
                         shift_type = "morning" if (offset + int(emp["id"].split("_")[1])) % 2 == 0 else "evening"
@@ -339,10 +352,7 @@ class SchedulingGenerator:
         ]
         assigned_by_day: set[tuple[str, str]] = set()
         for demand in peak_demands:
-            slot = "18:00-21:00"
-            day_index = WEEKDAY_NAMES.index(demand["weekday"])
-            if day_index >= 5:
-                slot = "16:00-21:00" if demand["demand_score"] >= 86 else "10:00-14:00"
+            slot = self._temporary_slot_for_demand(demand)
             task_code = demand["task_code"]
             candidates = [
                 emp
@@ -429,6 +439,133 @@ class SchedulingGenerator:
             tasks.sort(key=lambda row: row["priority"], reverse=True)
         return rows
 
+    def _demand_by_day_area(self, demand_results: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, Any]]]:
+        rows: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        for demand in demand_results:
+            rows[(demand["date"], demand["area_code"])].append(demand)
+        return rows
+
+    def _regular_pool_by_area(self, demand_results: list[dict[str, Any]]) -> dict[str, set[str]]:
+        demand_by_area: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for demand in demand_results:
+            demand_by_area[demand["area_code"]].append(demand)
+
+        pools: dict[str, set[str]] = {}
+        for area_code, area in self.areas.items():
+            regulars = [
+                emp
+                for emp in self.employees.values()
+                if emp["employee_type"] == "regular" and emp["main_area"] == area_code and emp["is_active"]
+            ]
+            target = self._weekly_regular_pool_size(area_code, area, demand_by_area.get(area_code, []), len(regulars))
+            ordered = sorted(
+                regulars,
+                key=lambda emp: (
+                    not self._has_professional_skill(emp["id"], area_code),
+                    not emp.get("is_protected"),
+                    emp["id"],
+                ),
+            )
+            pools[area_code] = {emp["id"] for emp in ordered[:target]}
+        return pools
+
+    def _weekly_regular_pool_size(
+        self,
+        area_code: str,
+        area: dict[str, Any],
+        area_demands: list[dict[str, Any]],
+        available_count: int,
+    ) -> int:
+        days: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for demand in area_demands:
+            days[demand["date"]].append(demand)
+
+        peak_score = max((int(row["demand_score"]) for row in area_demands), default=0)
+        boosted_days = sum(1 for rows in days.values() if self._has_external_boost(rows))
+        severe_days = sum(1 for rows in days.values() if self._high_slot_count(rows) >= 6)
+        extreme_days = sum(1 for rows in days.values() if self._high_slot_count(rows) >= 10)
+
+        if self._has_professional_tasks(area_code):
+            target = min(available_count, 14)
+            if peak_score >= 96 or severe_days >= 2 or boosted_days >= 3:
+                target += 1
+            if extreme_days:
+                target += 1
+            professional_count = sum(1 for emp in self.employees.values() if emp["main_area"] == area_code and self._has_professional_skill(emp["id"], area_code))
+            return min(available_count, max(target, professional_count))
+
+        baseline_max = int(area["baseline_max"])
+        if area_code == "produce":
+            target = 20
+            if peak_score >= 96 or boosted_days >= 3:
+                target += 1
+            if extreme_days:
+                target += 1
+            return min(available_count, max(target, baseline_max + 2))
+
+        if area_code == "cashier":
+            target = 14
+            if peak_score >= 92 or boosted_days >= 3:
+                target += 1
+            if extreme_days:
+                target += 1
+            return min(available_count, max(target, baseline_max + 2))
+
+        target = 7
+        if peak_score >= 90 or boosted_days >= 3:
+            target += 1
+        return min(available_count, max(target, baseline_max + 2))
+
+    def _daily_regular_target(
+        self,
+        area_code: str,
+        area: dict[str, Any],
+        day_demands: list[dict[str, Any]],
+        available_count: int,
+        needed_professionals: int,
+    ) -> int:
+        baseline_min = int(area["baseline_min"])
+        baseline_max = int(area["baseline_max"])
+        has_professional_tasks = self._has_professional_tasks(area_code)
+        base_target = baseline_min * 2 + 1 if has_professional_tasks else baseline_min + 1
+        peak_score = max((int(row["demand_score"]) for row in day_demands), default=0)
+        high_slot_count = self._high_slot_count(day_demands)
+        has_external_boost = self._has_external_boost(day_demands)
+
+        target = max(base_target, baseline_max, needed_professionals)
+        if peak_score >= 86:
+            target += 1
+        if high_slot_count >= 6:
+            target += 1
+        if has_external_boost and peak_score >= 78:
+            target += 1
+
+        if not has_professional_tasks:
+            if peak_score >= 86:
+                target = max(target, baseline_max + 2)
+            elif peak_score >= 68:
+                target = max(target, baseline_max + 1)
+            elif peak_score < 55 and not high_slot_count:
+                target = max(baseline_min, target - 1)
+
+        if has_professional_tasks and peak_score < 60 and not high_slot_count:
+            target = max(needed_professionals, target - 1)
+
+        return min(available_count, target)
+
+    def _high_slot_count(self, demands: list[dict[str, Any]]) -> int:
+        return len({
+            demand["slot"]
+            for demand in demands
+            if demand["priority"] == "high" or int(demand["demand_score"]) >= 78
+        })
+
+    def _has_external_boost(self, demands: list[dict[str, Any]]) -> bool:
+        return any(
+            any(keyword in factor for keyword in ("周末", "促销", "会员", "降雨", "团购", "暑期") for factor in demand["demand_factors"])
+            for demand in demands
+        )
+
     def _skills(self) -> dict[tuple[str, str, str], dict[str, Any]]:
         return {
             (row["employee_id"], row["area_code"], row["task_code"]): row
@@ -477,6 +614,18 @@ class SchedulingGenerator:
             return ["morning", "evening", "split"]
         return ["morning", "evening", "morning", "evening"] + ["split"] * max(0, count - 4)
 
+    def _non_professional_shift_plan(self, baseline_min: int, day_demands: list[dict[str, Any]]) -> list[str]:
+        needs_midday = any(
+            demand["priority"] == "high" and demand["slot"] in {"12:00-13:00", "13:00-14:00", "14:00-15:00"}
+            for demand in day_demands
+        )
+        plan = ["morning", "evening"] * baseline_min
+        if needs_midday:
+            insert_at = min(2, len(plan))
+            plan.insert(insert_at, "midday")
+        plan.append("split")
+        return plan
+
     def _daily_leave_capacity(self, area_code: str) -> int:
         regular_count = sum(
             1
@@ -510,6 +659,16 @@ class SchedulingGenerator:
         skill = self.skills[(employee_id, area_code, task_code)]
         return round(SKILL_RANK[skill["skill_level"]] * 20 + float(skill["area_familiarity"]) * 30 - used_hours * 0.7, 2)
 
+    def _temporary_slot_for_demand(self, demand: dict[str, Any]) -> str:
+        start_hour = int(demand["slot"][:2])
+        if start_hour < 14:
+            return "10:00-14:00"
+        if start_hour < 17:
+            return "14:00-18:00"
+        if start_hour >= 20:
+            return "17:00-22:00"
+        return "18:00-22:00"
+
     def _covers(self, assignment_slot: str, demand_slot: str) -> bool:
         start_hour = int(demand_slot[:2])
         for start, end in SLOT_RANGES.get(assignment_slot, []):
@@ -521,9 +680,12 @@ class SchedulingGenerator:
         return sum(end - start for start, end in SLOT_RANGES[slot])
 
     def _shift_label(self, shift_type: str) -> str:
-        return {"morning": "早班8:00-16:00", "evening": "晚班14:00-22:00", "split": "两头班8:00-12:00/17:00-21:00"}.get(
-            shift_type, "轮班"
-        )
+        return {
+            "morning": "早班8:00-16:00",
+            "midday": "午间班10:00-18:00",
+            "evening": "晚班14:00-22:00",
+            "split": "两头班8:00-12:00/17:00-21:00",
+        }.get(shift_type, "轮班")
 
     def _summary(self, kpis: dict[str, Any], risks: list[dict[str, Any]]) -> str:
         return (

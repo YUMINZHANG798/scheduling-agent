@@ -67,7 +67,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    void refreshVersions();
+    void loadInitialSchedule();
   }, []);
 
   useEffect(() => {
@@ -141,8 +141,27 @@ export function App() {
     try {
       const rows = await api.scheduleVersions();
       setVersions(rows);
+      return rows;
     } catch {
       setVersions([]);
+      return [];
+    }
+  }
+
+  async function loadInitialSchedule() {
+    const rows = await refreshVersions();
+    const latest = rows.find((version) => version.schedule_item_count > 0);
+    if (!latest) return;
+    try {
+      const response = await api.getSchedule(latest.id);
+      setSchedule(response);
+      setCurrentVersion(response);
+      currentVersionRef.current = response;
+      setHasCurrentSessionSchedule(true);
+      setViewingHistory(false);
+      setMessages([{ role: "assistant", content: "已自动打开最近一次历史排班记录。你可以直接查看，也可以点击生成下周排班重新计算。" }]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "加载最近历史排班失败");
     }
   }
 
@@ -197,14 +216,17 @@ export function App() {
     setError("");
     try {
       await api.resetDemo();
-      setSchedule(null);
-      setCurrentVersion(null);
-      currentVersionRef.current = null;
-      setHasCurrentSessionSchedule(false);
+      const rows = await refreshVersions();
+      const latest = rows.find((version) => version.schedule_item_count > 0);
+      if (!latest) throw new Error("Demo 历史排班样本生成失败");
+      const response = await api.getSchedule(latest.id);
+      setSchedule(response);
+      setCurrentVersion(response);
+      currentVersionRef.current = response;
+      setHasCurrentSessionSchedule(true);
       setViewingHistory(false);
-      setMessages([{ role: "assistant", content: "Demo 数据已重置，可以重新生成班表。" }]);
+      setMessages([{ role: "assistant", content: "Demo 数据已重置，已打开最新一份合理波动的历史排班样本。" }]);
       setAgentInput("");
-      void refreshVersions();
     } catch (err) {
       setError(err instanceof Error ? err.message : "重置失败");
     } finally {

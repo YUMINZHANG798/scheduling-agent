@@ -40,6 +40,81 @@ class ScheduleService:
         self.store.save_version(payload)
         return ScheduleResponse(**payload)
 
+    def reset_demo(self) -> None:
+        self.store.reset()
+        self.ensure_demo_history(force=True)
+
+    def ensure_demo_history(self, force: bool = False) -> None:
+        profiles = [
+            {
+                "week_start": "2026-06-15",
+                "generated_at": "2026-06-14T13:30:00Z",
+                "summary": "雨天线上订单波动周",
+                "adjustments": [
+                    {"weekday": "Wednesday", "slots": {"10:00-11:00", "11:00-12:00", "18:00-19:00"}, "areas": {"produce", "cashier"}, "factor": 1.08, "label": "阵雨带来线上拣货集中"},
+                    {"weekday": "Friday", "slots": {"17:00-18:00", "18:00-19:00", "19:00-20:00"}, "areas": {"aquatic", "meat", "produce"}, "factor": 1.07, "label": "周五晚高峰提前备货"},
+                ],
+            },
+            {
+                "week_start": "2026-06-22",
+                "generated_at": "2026-06-21T13:20:00Z",
+                "summary": "社区团购提货增长周",
+                "adjustments": [
+                    {"weekday": "Thursday", "slots": {"16:00-17:00", "17:00-18:00", "18:00-19:00"}, "areas": {"produce", "replenishment"}, "factor": 1.12, "label": "社区团购提货集中"},
+                    {"weekday": "Saturday", "slots": {"10:00-11:00", "11:00-12:00", "12:00-13:00"}, "areas": {"meat"}, "factor": 1.08, "label": "周末肉类备餐需求上浮"},
+                ],
+            },
+            {
+                "week_start": "2026-06-29",
+                "generated_at": "2026-06-28T13:10:00Z",
+                "summary": "月末平峰控工时周",
+                "adjustments": [
+                    {"weekday": "Monday", "slots": set(SLOTS_FOR_HISTORY), "areas": set(AREA_CODES_FOR_HISTORY), "factor": 0.94, "label": "月末平峰控工时"},
+                    {"weekday": "Tuesday", "slots": set(SLOTS_FOR_HISTORY), "areas": set(AREA_CODES_FOR_HISTORY), "factor": 0.95, "label": "工作日客流回落"},
+                    {"weekday": "Sunday", "slots": {"17:00-18:00", "18:00-19:00"}, "areas": {"aquatic", "produce"}, "factor": 1.06, "label": "周日晚间补货小高峰"},
+                ],
+            },
+            {
+                "week_start": "2026-07-06",
+                "generated_at": "2026-07-05T13:25:00Z",
+                "summary": "暑期周末家庭采购周",
+                "adjustments": [
+                    {"weekday": "Saturday", "slots": {"10:00-11:00", "11:00-12:00", "17:00-18:00", "18:00-19:00"}, "areas": {"aquatic", "meat", "produce"}, "factor": 1.13, "label": "暑期家庭采购上浮"},
+                    {"weekday": "Sunday", "slots": {"10:00-11:00", "11:00-12:00", "18:00-19:00"}, "areas": {"aquatic", "meat"}, "factor": 1.1, "label": "周末家庭备餐高峰"},
+                ],
+            },
+            {
+                "week_start": "2026-07-13",
+                "generated_at": "2026-07-12T13:40:00Z",
+                "summary": "本周雨天促销预测周",
+                "adjustments": [],
+            },
+        ]
+        expected_ids = {f"hist_{profile['week_start'].replace('-', '')}" for profile in profiles}
+        existing_ids = {row["id"] for row in self.store.list_versions(self.settings.store_id)}
+        if not force and expected_ids.issubset(existing_ids):
+            return
+
+        for index, profile in enumerate(profiles, 1):
+            demand_results, insights = self.demand_service.calculate_week(profile["week_start"])
+            demand_results = self._apply_historical_profile(demand_results, profile["adjustments"])
+            insights = self._insights_from_demand(demand_results)
+            payload = self.generator.generate(profile["week_start"], demand_results)
+            payload["version_id"] = f"hist_{profile['week_start'].replace('-', '')}"
+            payload["generated_at"] = profile["generated_at"]
+            payload["agent_summary"] = (
+                f"历史排班样本{index}：{profile['summary']}。系统基于历史销售、客流、线上订单、天气/周末/促销因素生成，"
+                f"专业岗覆盖率{payload['kpis']['professional_coverage_rate']:.0%}，区域保底达成率{payload['kpis']['baseline_achievement_rate']:.0%}。"
+            )
+            payload["agent_fallback"] = False
+            payload["demand_insights"] = insights
+            payload["schedule_items"] = [
+                {**item, "version_id": payload["version_id"]}
+                for item in payload["schedule_items"]
+            ]
+            payload["staffing_summary"] = self._staffing_summary(payload["week_start"], payload["schedule_items"])
+            self.store.save_version(payload)
+
     def get(self, version_id: str) -> ScheduleResponse | None:
         version = self.store.get_version(version_id)
         if not version:
@@ -382,6 +457,80 @@ class ScheduleService:
                 count += 1
         return count
 
+    def _apply_historical_profile(
+        self,
+        demand_results: list[dict[str, Any]],
+        adjustments: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not adjustments:
+            return demand_results
+
+        adjusted_rows: list[dict[str, Any]] = []
+        for row in demand_results:
+            updated = dict(row)
+            factor = 1.0
+            extra_labels: list[str] = []
+            for adjustment in adjustments:
+                if row["weekday"] != adjustment["weekday"]:
+                    continue
+                if row["slot"] not in adjustment["slots"]:
+                    continue
+                if row["area_code"] not in adjustment["areas"]:
+                    continue
+                factor *= float(adjustment["factor"])
+                extra_labels.append(adjustment["label"])
+
+            if factor != 1.0:
+                final_score = max(25, min(100, round(row["demand_score"] * factor)))
+                task = next(
+                    task
+                    for task in self.demand_service.tasks_by_area[row["area_code"]]
+                    if task["task_code"] == row["task_code"]
+                )
+                required_count = self.demand_service._required_count(
+                    self.demand_service.areas[row["area_code"]],
+                    final_score,
+                    task["is_professional"],
+                )
+                labor_breakdown = self.demand_service._labor_breakdown(
+                    self.demand_service.areas[row["area_code"]],
+                    task,
+                    final_score,
+                    required_count,
+                )
+                updated.update({
+                    "required_count": required_count,
+                    **labor_breakdown,
+                    "demand_score": final_score,
+                    "demand_factors": [*row["demand_factors"], *extra_labels],
+                    "priority": "high" if final_score >= 78 else ("medium" if final_score >= 55 else "low"),
+                    "confidence": "high" if len(row["demand_factors"]) + len(extra_labels) >= 3 else "medium",
+                })
+            adjusted_rows.append(updated)
+        return adjusted_rows
+
+    def _insights_from_demand(self, demand_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        fields = [
+            "date",
+            "weekday",
+            "slot",
+            "area_code",
+            "area_name",
+            "required_count",
+            "professional_required_count",
+            "regular_required_count",
+            "temporary_required_count",
+            "demand_score",
+            "demand_factors",
+            "priority",
+            "confidence",
+        ]
+        return sorted(
+            [{key: row[key] for key in fields} for row in demand_results if row["priority"] == "high"],
+            key=lambda row: row["demand_score"],
+            reverse=True,
+        )[:12]
+
     def _validate_generation_request(self, request: GenerateScheduleRequest) -> None:
         if request.store_id != self.settings.store_id:
             raise ValueError("STORE_NOT_FOUND")
@@ -510,3 +659,20 @@ AREA_SORT_ORDER = {
 }
 
 WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+AREA_CODES_FOR_HISTORY = {"aquatic", "meat", "produce", "cashier", "replenishment"}
+SLOTS_FOR_HISTORY = {
+    "08:00-09:00",
+    "09:00-10:00",
+    "10:00-11:00",
+    "11:00-12:00",
+    "12:00-13:00",
+    "13:00-14:00",
+    "14:00-15:00",
+    "15:00-16:00",
+    "16:00-17:00",
+    "17:00-18:00",
+    "18:00-19:00",
+    "19:00-20:00",
+    "20:00-21:00",
+    "21:00-22:00",
+}
